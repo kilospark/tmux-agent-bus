@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>tmux-agent-bus — inter-agent communication for tmux</title>
+  <meta name="description" content="MCP server that lets AI agents talk to each other across tmux panes. Zero config. Single binary.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700;800&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --bg: #0a0a0a;
+      --fg: #b0b0b0;
+      --fg-dim: #555;
+      --fg-bright: #e0e0e0;
+      --accent: #5af78e;
+      --accent-dim: #2a7a45;
+      --red: #ff5c57;
+      --yellow: #f3f99d;
+      --blue: #57c7ff;
+      --cyan: #9aedfe;
+      --magenta: #ff6ac1;
+      --border: #222;
+      --surface: #111;
+      --mono: 'JetBrains Mono', monospace;
+      --serif: 'Newsreader', Georgia, serif;
+    }
+
+    html { font-size: 15px; }
+
+    body {
+      font-family: var(--mono);
+      background: var(--bg);
+      color: var(--fg);
+      line-height: 1.7;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    ::selection {
+      background: var(--accent);
+      color: var(--bg);
+    }
+
+    a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    a:hover { text-decoration: underline; }
+
+    /* --- LAYOUT --- */
+
+    .container {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* --- NAV --- */
+
+    nav {
+      border-bottom: 1px solid var(--border);
+      padding: 16px 0;
+      position: sticky;
+      top: 0;
+      background: var(--bg);
+      z-index: 100;
+    }
+
+    nav .container {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    nav .logo {
+      font-weight: 700;
+      font-size: 0.85rem;
+      color: var(--fg-bright);
+      letter-spacing: -0.02em;
+    }
+
+    nav .logo span { color: var(--accent); }
+
+    nav .links {
+      display: flex;
+      gap: 24px;
+      font-size: 0.75rem;
+      color: var(--fg-dim);
+    }
+
+    nav .links a { color: var(--fg-dim); }
+    nav .links a:hover { color: var(--fg-bright); text-decoration: none; }
+
+    /* --- HERO --- */
+
+    .hero {
+      padding: 80px 0 60px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .hero-label {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      color: var(--accent);
+      margin-bottom: 24px;
+      opacity: 0;
+      animation: fadeIn 0.6s ease forwards;
+    }
+
+    .hero h1 {
+      font-family: var(--serif);
+      font-weight: 400;
+      font-size: clamp(2rem, 5vw, 3.2rem);
+      color: var(--fg-bright);
+      line-height: 1.2;
+      max-width: 700px;
+      margin-bottom: 20px;
+      opacity: 0;
+      animation: fadeIn 0.6s ease 0.1s forwards;
+    }
+
+    .hero h1 em {
+      font-style: italic;
+      color: var(--accent);
+    }
+
+    .hero-sub {
+      font-size: 0.85rem;
+      color: var(--fg-dim);
+      max-width: 520px;
+      line-height: 1.8;
+      margin-bottom: 40px;
+      opacity: 0;
+      animation: fadeIn 0.6s ease 0.2s forwards;
+    }
+
+    .install-block {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      padding: 16px 20px;
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 0.8rem;
+      opacity: 0;
+      animation: fadeIn 0.6s ease 0.35s forwards;
+    }
+
+    .install-block .prompt { color: var(--accent); user-select: none; }
+    .install-block code { color: var(--fg-bright); }
+    .install-block .pipe { color: var(--fg-dim); }
+
+    .install-block button {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--fg-dim);
+      padding: 4px 10px;
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .install-block button:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .hero-meta {
+      margin-top: 20px;
+      font-size: 0.7rem;
+      color: var(--fg-dim);
+      display: flex;
+      gap: 20px;
+      opacity: 0;
+      animation: fadeIn 0.6s ease 0.45s forwards;
+    }
+
+    .hero-meta span::before {
+      content: '·';
+      margin-right: 6px;
+      color: var(--fg-dim);
+    }
+
+    .hero-meta span:first-child::before { display: none; }
+
+    /* --- TERMINAL DEMO --- */
+
+    .demo-section {
+      padding: 60px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .demo-section .section-label {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      color: var(--fg-dim);
+      margin-bottom: 30px;
+    }
+
+    .tmux-frame {
+      border: 1px solid var(--border);
+      background: var(--surface);
+      overflow: hidden;
+    }
+
+    .tmux-bar {
+      background: var(--accent-dim);
+      padding: 3px 12px;
+      font-size: 0.65rem;
+      color: var(--bg);
+      display: flex;
+      justify-content: space-between;
+      font-weight: 600;
+    }
+
+    .tmux-panes {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      min-height: 320px;
+    }
+
+    .tmux-pane {
+      padding: 0;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .tmux-pane + .tmux-pane {
+      border-left: 1px solid var(--accent-dim);
+    }
+
+    .pane-header {
+      font-size: 0.6rem;
+      padding: 4px 12px;
+      background: rgba(90, 247, 142, 0.06);
+      border-bottom: 1px solid var(--border);
+      color: var(--accent);
+      font-weight: 600;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .pane-header .type { color: var(--fg-dim); font-weight: 400; }
+
+    .pane-body {
+      padding: 12px;
+      font-size: 0.72rem;
+      line-height: 1.9;
+      min-height: 280px;
+    }
+
+    .pane-body .line {
+      opacity: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .pane-body .line.visible {
+      opacity: 1;
+    }
+
+    .pane-body .prompt-line { color: var(--fg-dim); }
+    .pane-body .output-line { color: var(--fg); }
+    .pane-body .agent-msg { color: var(--cyan); }
+    .pane-body .success { color: var(--accent); }
+    .pane-body .handoff { color: var(--yellow); }
+    .pane-body .cursor-blink {
+      display: inline-block;
+      width: 7px;
+      height: 14px;
+      background: var(--accent);
+      vertical-align: middle;
+      animation: blink 1s step-end infinite;
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0; }
+    }
+
+    /* --- HOW IT WORKS --- */
+
+    .how-section {
+      padding: 60px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .how-section .section-label {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      color: var(--fg-dim);
+      margin-bottom: 40px;
+    }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 0;
+    }
+
+    .step {
+      padding: 24px;
+      border: 1px solid var(--border);
+      margin-left: -1px;
+      margin-top: -1px;
+    }
+
+    .step:first-child { margin-left: 0; }
+
+    .step-num {
+      font-size: 2rem;
+      font-weight: 800;
+      color: var(--border);
+      line-height: 1;
+      margin-bottom: 16px;
+    }
+
+    .step h3 {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--fg-bright);
+      margin-bottom: 8px;
+    }
+
+    .step p {
+      font-size: 0.72rem;
+      color: var(--fg-dim);
+      line-height: 1.7;
+    }
+
+    .step code {
+      color: var(--accent);
+      font-size: 0.7rem;
+    }
+
+    /* --- TOOLS --- */
+
+    .tools-section {
+      padding: 60px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .tools-section .section-label {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      color: var(--fg-dim);
+      margin-bottom: 30px;
+    }
+
+    .tools-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0;
+    }
+
+    .tool-card {
+      border: 1px solid var(--border);
+      padding: 28px 24px;
+      margin-left: -1px;
+      margin-top: -1px;
+      transition: background 0.2s;
+    }
+
+    .tool-card:first-child { margin-left: 0; }
+
+    .tool-card:hover {
+      background: rgba(90, 247, 142, 0.03);
+    }
+
+    .tool-name {
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: var(--accent);
+      margin-bottom: 10px;
+    }
+
+    .tool-desc {
+      font-size: 0.75rem;
+      color: var(--fg);
+      line-height: 1.7;
+      margin-bottom: 14px;
+    }
+
+    .tool-params {
+      font-size: 0.65rem;
+      color: var(--fg-dim);
+    }
+
+    .tool-params span {
+      display: inline-block;
+      border: 1px solid var(--border);
+      padding: 2px 8px;
+      margin: 2px 4px 2px 0;
+    }
+
+    /* --- ARCH --- */
+
+    .arch-section {
+      padding: 60px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .arch-section .section-label {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      color: var(--fg-dim);
+      margin-bottom: 30px;
+    }
+
+    .arch-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0;
+    }
+
+    .arch-item {
+      border: 1px solid var(--border);
+      padding: 20px 24px;
+      margin-left: -1px;
+      margin-top: -1px;
+    }
+
+    .arch-item:nth-child(odd) { margin-left: 0; }
+    .arch-item:nth-child(-n+2) { margin-top: 0; }
+
+    .arch-key {
+      font-size: 0.7rem;
+      font-weight: 600;
+      color: var(--fg-bright);
+      margin-bottom: 6px;
+    }
+
+    .arch-val {
+      font-size: 0.72rem;
+      color: var(--fg-dim);
+      line-height: 1.7;
+    }
+
+    .arch-val code {
+      color: var(--accent);
+      font-size: 0.68rem;
+    }
+
+    /* --- FOOTER --- */
+
+    footer {
+      padding: 40px 0;
+      text-align: center;
+    }
+
+    footer p {
+      font-size: 0.7rem;
+      color: var(--fg-dim);
+    }
+
+    footer a { color: var(--fg-dim); }
+    footer a:hover { color: var(--accent); }
+
+    /* --- ANIMATIONS --- */
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .reveal {
+      opacity: 0;
+      transform: translateY(12px);
+      transition: opacity 0.5s ease, transform 0.5s ease;
+    }
+
+    .reveal.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    /* --- RESPONSIVE --- */
+
+    @media (max-width: 768px) {
+      .tmux-panes { grid-template-columns: 1fr; }
+      .tmux-pane + .tmux-pane { border-left: none; border-top: 1px solid var(--accent-dim); }
+      .steps { grid-template-columns: 1fr 1fr; }
+      .tools-grid { grid-template-columns: 1fr; }
+      .arch-grid { grid-template-columns: 1fr; }
+      .arch-item:nth-child(odd) { margin-left: -1px; }
+      .arch-item:nth-child(-n+2) { margin-top: -1px; }
+      .arch-item:first-child { margin: 0; }
+      .install-block { flex-wrap: wrap; }
+    }
+
+    @media (max-width: 480px) {
+      html { font-size: 14px; }
+      .hero { padding: 50px 0 40px; }
+      .steps { grid-template-columns: 1fr; }
+      .hero-meta { flex-direction: column; gap: 4px; }
+    }
+  </style>
+</head>
+<body>
+
+  <nav>
+    <div class="container">
+      <div class="logo"><span>$</span> tmux-agent-bus</div>
+      <div class="links">
+        <a href="https://github.com/kilospark/tmux-agent-bus">github</a>
+        <a href="https://github.com/kilospark/tmux-agent-bus/releases">releases</a>
+      </div>
+    </div>
+  </nav>
+
+  <section class="hero">
+    <div class="container">
+      <div class="hero-label">inter-agent communication</div>
+      <h1>Your AI agents should <em>talk to each other</em>, not through you</h1>
+      <p class="hero-sub">
+        MCP server that lets Claude, Codex, and Copilot hand off work
+        across tmux panes. No orchestrator. No config files.
+        Just agents collaborating autonomously.
+      </p>
+
+      <div class="install-block">
+        <span class="prompt">$</span>
+        <code>curl -fsSL https://raw.githubusercontent.com/kilospark/tmux-agent-bus/main/install.sh <span class="pipe">|</span> sh</code>
+        <button onclick="copyInstall()" id="copy-btn">copy</button>
+      </div>
+
+      <div class="hero-meta">
+        <span>single binary</span>
+        <span>~700KB</span>
+        <span>zero dependencies</span>
+        <span>macOS &amp; Linux</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="demo-section reveal">
+    <div class="container">
+      <div class="section-label">what it looks like</div>
+      <div class="tmux-frame">
+        <div class="tmux-bar">
+          <span>0:agents*</span>
+          <span>tmux</span>
+        </div>
+        <div class="tmux-panes">
+          <div class="tmux-pane" id="pane-left">
+            <div class="pane-header">
+              <span>claude-1</span>
+              <span class="type">pane 0:0.0</span>
+            </div>
+            <div class="pane-body" id="left-body"></div>
+          </div>
+          <div class="tmux-pane" id="pane-right">
+            <div class="pane-header">
+              <span>codex-1</span>
+              <span class="type">pane 0:0.1</span>
+            </div>
+            <div class="pane-body" id="right-body"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="how-section reveal">
+    <div class="container">
+      <div class="section-label">how it works</div>
+      <div class="steps">
+        <div class="step">
+          <div class="step-num">01</div>
+          <h3>Auto-register</h3>
+          <p>Each agent spawns an MCP server. It detects its tmux pane, session, and agent type. Assigns itself a name like <code>claude-1</code>.</p>
+        </div>
+        <div class="step">
+          <div class="step-num">02</div>
+          <h3>Discover</h3>
+          <p>Agents call <code>who</code> to see all other agents on the same tmux session. No config needed &mdash; same session = same channel.</p>
+        </div>
+        <div class="step">
+          <div class="step-num">03</div>
+          <h3>Hand off</h3>
+          <p>When done, an agent calls <code>signal_done</code> with a summary and request. The message is injected into the target pane via <code>tmux send-keys</code>.</p>
+        </div>
+        <div class="step">
+          <div class="step-num">04</div>
+          <h3>Clean up</h3>
+          <p>When an agent exits, it unregisters automatically. No stale entries. No orphan processes. No manual cleanup.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="tools-section reveal">
+    <div class="container">
+      <div class="section-label">tools</div>
+      <div class="tools-grid">
+        <div class="tool-card">
+          <div class="tool-name">who</div>
+          <div class="tool-desc">List all agents on your channel. Shows name, type, and pane location.</div>
+          <div class="tool-params">no params</div>
+        </div>
+        <div class="tool-card">
+          <div class="tool-name">signal_done</div>
+          <div class="tool-desc">Hand off to another agent when you're done. Sends summary + request to their pane.</div>
+          <div class="tool-params">
+            <span>next</span>
+            <span>summary</span>
+            <span>request</span>
+          </div>
+        </div>
+        <div class="tool-card">
+          <div class="tool-name">send_message</div>
+          <div class="tool-desc">Send a message to another agent without handing off. For questions and FYIs.</div>
+          <div class="tool-params">
+            <span>to</span>
+            <span>message</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="arch-section reveal">
+    <div class="container">
+      <div class="section-label">architecture</div>
+      <div class="arch-grid">
+        <div class="arch-item">
+          <div class="arch-key">Channel</div>
+          <div class="arch-val">= tmux session. Agents in the same session see each other. Different sessions are isolated.</div>
+        </div>
+        <div class="arch-item">
+          <div class="arch-key">Registration</div>
+          <div class="arch-val">Automatic. Process tree walking detects pane, session, and agent type at startup.</div>
+        </div>
+        <div class="arch-item">
+          <div class="arch-key">Routing</div>
+          <div class="arch-val"><code>tmux send-keys</code> injects messages directly into the target pane's stdin. No sockets, no HTTP.</div>
+        </div>
+        <div class="arch-item">
+          <div class="arch-key">State</div>
+          <div class="arch-val">One JSON file per channel at <code>~/.agent-bus/channels/&lt;session&gt;.json</code></div>
+        </div>
+        <div class="arch-item">
+          <div class="arch-key">Protocol</div>
+          <div class="arch-val">Raw JSON-RPC over stdio. No MCP SDK. No async runtime. ~300 lines of Rust.</div>
+        </div>
+        <div class="arch-item">
+          <div class="arch-key">Cleanup</div>
+          <div class="arch-val">Agents unregister via <code>Drop</code> trait on exit. SIGINT/SIGTERM handled automatically.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="container">
+      <p><a href="https://github.com/kilospark/tmux-agent-bus">kilospark/tmux-agent-bus</a></p>
+    </div>
+  </footer>
+
+  <script>
+    // Copy install command
+    function copyInstall() {
+      const cmd = 'curl -fsSL https://raw.githubusercontent.com/kilospark/tmux-agent-bus/main/install.sh | sh';
+      navigator.clipboard.writeText(cmd).then(() => {
+        const btn = document.getElementById('copy-btn');
+        btn.textContent = 'copied';
+        setTimeout(() => btn.textContent = 'copy', 1500);
+      });
+    }
+
+    // Scroll reveal
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(e => {
+        if (e.isIntersecting) {
+          e.target.classList.add('visible');
+          observer.unobserve(e.target);
+        }
+      });
+    }, { threshold: 0.15 });
+
+    document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+
+    // Terminal demo animation
+    const leftLines = [
+      { cls: 'prompt-line', text: '> Refactored auth module into 3 files.' },
+      { cls: 'prompt-line', text: '> Running signal_done...' },
+      { cls: '', text: '' },
+      { cls: 'success', text: 'Handed off to codex-1 (pane 0:0.1).' },
+      { cls: '', text: '' },
+      { cls: '', text: '...' },
+      { cls: '', text: '' },
+      { cls: 'agent-msg', text: '[from codex-1]: Tests pass. 14/14 green.' },
+      { cls: 'agent-msg', text: 'Request: review the error handling in' },
+      { cls: 'agent-msg', text: 'auth/validate.rs and add edge cases.' },
+      { cls: '', text: '' },
+      { cls: 'prompt-line', text: '> Reading auth/validate.rs...' },
+    ];
+
+    const rightLines = [
+      { cls: 'prompt-line', text: '> Waiting for work...' },
+      { cls: '', text: '' },
+      { cls: '', text: '...' },
+      { cls: '', text: '' },
+      { cls: 'handoff', text: '[from claude-1]: Refactored auth module' },
+      { cls: 'handoff', text: 'into 3 files. Request: run the test' },
+      { cls: 'handoff', text: 'suite and report results.' },
+      { cls: '', text: '' },
+      { cls: 'prompt-line', text: '> Running cargo test...' },
+      { cls: 'success', text: 'test auth::login ... ok' },
+      { cls: 'success', text: 'test auth::validate ... ok' },
+      { cls: 'success', text: 'test auth::refresh ... ok' },
+      { cls: 'prompt-line', text: '> All tests pass. Handing back...' },
+      { cls: 'success', text: 'Handed off to claude-1 (pane 0:0.0).' },
+    ];
+
+    function renderLines(containerId, lines) {
+      const container = document.getElementById(containerId);
+      container.innerHTML = '';
+      lines.forEach((l, i) => {
+        const div = document.createElement('div');
+        div.className = 'line ' + l.cls;
+        div.textContent = l.text || '\u00a0';
+        container.appendChild(div);
+      });
+      return container.querySelectorAll('.line');
+    }
+
+    function animateDemo() {
+      const leftEls = renderLines('left-body', leftLines);
+      const rightEls = renderLines('right-body', rightLines);
+
+      const allSteps = [];
+
+      // Interleave: left writes first 4, then right receives and processes, then left gets response
+      leftEls.forEach((el, i) => {
+        let delay;
+        if (i < 4) delay = i * 400;
+        else if (i < 7) delay = 4800 + (i - 4) * 300;
+        else delay = 5800 + (i - 7) * 350;
+        allSteps.push({ el, delay });
+      });
+
+      rightEls.forEach((el, i) => {
+        let delay;
+        if (i < 2) delay = 200 + i * 400;
+        else if (i < 4) delay = 1200 + (i - 2) * 300;
+        else delay = 1800 + (i - 4) * 350;
+        allSteps.push({ el, delay });
+      });
+
+      allSteps.forEach(({ el, delay }) => {
+        setTimeout(() => el.classList.add('visible'), delay);
+      });
+
+      // Loop the demo
+      const totalDuration = 9000;
+      setTimeout(animateDemo, totalDuration);
+    }
+
+    // Start demo when section is visible
+    const demoObserver = new IntersectionObserver((entries) => {
+      entries.forEach(e => {
+        if (e.isIntersecting) {
+          animateDemo();
+          demoObserver.unobserve(e.target);
+        }
+      });
+    }, { threshold: 0.3 });
+
+    demoObserver.observe(document.querySelector('.demo-section'));
+  </script>
+
+</body>
+</html>

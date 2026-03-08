@@ -147,19 +147,17 @@ fn parent_pid(pid: u32) -> Option<u32> {
 
 fn send_to_pane(pane: &str, message: &str) -> Result<()> {
     let sanitized: String = message.split_whitespace().collect::<Vec<_>>().join(" ");
+    // Single tmux invocation with \; to chain: send literal text, then Enter key
+    // This avoids the race condition of two separate tmux calls
     let status = Command::new("tmux")
-        .args(["send-keys", "-t", pane, "-l", &sanitized])
+        .args([
+            "send-keys", "-t", pane, "-l", &sanitized, ";",
+            "send-keys", "-t", pane, "Enter",
+        ])
         .status()
         .context("failed to run tmux send-keys")?;
     if !status.success() {
         anyhow::bail!("tmux send-keys failed");
-    }
-    let status = Command::new("tmux")
-        .args(["send-keys", "-t", pane, "Enter"])
-        .status()
-        .context("failed to send Enter")?;
-    if !status.success() {
-        anyhow::bail!("tmux send-keys Enter failed");
     }
     Ok(())
 }
