@@ -7,6 +7,11 @@ import { join } from "path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { fileURLToPath } from "url";
+import { dirname } from "path";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const INSTRUCTIONS = readFileSync(join(__dirname, "MCP_INSTRUCTIONS.md"), "utf-8");
 
 const BUS_DIR = join(homedir(), ".agent-bus");
 const CONFIG_PATH = join(BUS_DIR, "config.json");
@@ -50,6 +55,8 @@ const config = loadConfig();
 const server = new McpServer({
   name: "agent-bus",
   version: "0.1.0",
+}, {
+  instructions: INSTRUCTIONS,
 });
 
 server.tool(
