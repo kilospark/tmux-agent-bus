@@ -106,13 +106,16 @@ if (myChannel) {
   const channelData = loadChannel(myChannel);
   const existing = new Set(Object.keys(channelData.agents));
 
+  // Name as type-N: claude-1, codex-1, claude-2, etc.
+  let n = 1;
   do {
-    myName = `agent-${randomBytes(3).toString("hex")}`;
+    myName = `${myType}-${n}`;
+    n++;
   } while (existing.has(myName));
 
   channelData.agents[myName] = { pane: myPane, type: myType };
   saveChannel(myChannel, channelData);
-  console.error(`agent-bus: registered as "${myName}" [${myType}] on channel "${myChannel}" (pane ${myPane})`);
+  console.error(`agent-bus: registered as "${myName}" on channel "${myChannel}" (pane ${myPane})`);
 } else {
   console.error("agent-bus: WARNING — not inside tmux, registration skipped");
 }
