@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-REPO="karthik/tmux-agent-bus"
+REPO="kilospark/tmux-agent-bus"
 BINARY="tmux-agent-bus"
 
 # Use INSTALL_DIR if set, otherwise default to /usr/local/bin
