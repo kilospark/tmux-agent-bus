@@ -115,6 +115,12 @@ if (myChannel) {
 
   channelData.agents[myName] = { pane: myPane, type: myType };
   saveChannel(myChannel, channelData);
+
+  // Set tmux pane title so the user can see who's who
+  try {
+    execSync(`tmux select-pane -t ${JSON.stringify(myPane)} -T ${JSON.stringify(myName)}`, { timeout: 2000 });
+  } catch {}
+
   console.error(`agent-bus: registered as "${myName}" on channel "${myChannel}" (pane ${myPane})`);
 } else {
   console.error("agent-bus: WARNING — not inside tmux, registration skipped");
