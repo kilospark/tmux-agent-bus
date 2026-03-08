@@ -116,9 +116,9 @@ if (myChannel) {
   channelData.agents[myName] = { pane: myPane, type: myType };
   saveChannel(myChannel, channelData);
 
-  // Set tmux pane title so the user can see who's who
+  // Set tmux pane option so the user can see who's who (pane title gets overwritten by Claude Code)
   try {
-    execSync(`tmux select-pane -t ${JSON.stringify(myPane)} -T ${JSON.stringify(myName)}`, { timeout: 2000 });
+    execSync(`tmux set-option -p -t ${JSON.stringify(myPane)} @agent-name ${JSON.stringify(myName)}`, { timeout: 2000 });
   } catch {}
 
   console.error(`tmux-agent-bus: registered as "${myName}" on channel "${myChannel}" (pane ${myPane})`);

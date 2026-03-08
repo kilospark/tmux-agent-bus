@@ -8,7 +8,7 @@ Each agent spawns its own tmux-agent-bus MCP server. On startup, the server:
 1. Detects which tmux pane and session it's in
 2. Detects the agent type (claude/codex/copilot) from the process tree
 3. Auto-registers with a human-readable name (`claude-1`, `codex-1`, etc.)
-4. Sets the tmux pane title so you can see who's who
+4. Sets a tmux pane option (`@agent-name`) so you can see who's who in pane borders
 5. Cleans up on exit
 
 Agents communicate by calling `signal_done` or `send_message`, which injects text into the target agent's tmux pane via `tmux send-keys`.
@@ -25,17 +25,17 @@ codex mcp add agent-bus -- node /path/to/agent-bus/index.js
 
 ## tmux setup
 
-Show agent names in pane borders:
+Show agent names in pane borders (uses a custom pane option since Claude Code overwrites `pane_title`):
 
 ```bash
-tmux set -g pane-border-format " #{pane_title} "
+tmux set -g pane-border-format " #{@agent-name} | #{pane_title} "
 tmux set -g pane-border-status top
 ```
 
 Add to `~/.tmux.conf` to persist:
 
 ```
-set -g pane-border-format " #{pane_title} "
+set -g pane-border-format " #{@agent-name} | #{pane_title} "
 set -g pane-border-status top
 ```
 
@@ -50,7 +50,7 @@ set -g pane-border-status top
 ## Architecture
 
 - **Channel** = tmux session. Agents in the same session see each other.
-- **Registration** = automatic. Name assigned at startup, pane title set.
+- **Registration** = automatic. Name assigned at startup, pane option set.
 - **Routing** = `tmux send-keys`. Messages typed into the target pane's stdin.
 - **State** = one JSON file per channel at `~/.agent-bus/channels/<session>.json`
 - **Cleanup** = agents unregister on exit. No stale entries.
