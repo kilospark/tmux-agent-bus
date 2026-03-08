@@ -13,19 +13,25 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const INSTRUCTIONS = readFileSync(join(__dirname, "MCP_INSTRUCTIONS.md"), "utf-8");
 
 const BUS_DIR = join(homedir(), ".agent-bus");
-const CONFIG_PATH = join(BUS_DIR, "config.json");
+const CHANNELS_DIR = join(BUS_DIR, "channels");
 const LOG_PATH = join(BUS_DIR, "history.jsonl");
 
-function loadConfig() {
-  mkdirSync(BUS_DIR, { recursive: true });
-  if (!existsSync(CONFIG_PATH)) {
-    writeFileSync(CONFIG_PATH, JSON.stringify({ channels: {} }, null, 2) + "\n");
-  }
-  return JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
+function channelPath(channel) {
+  return join(CHANNELS_DIR, `${channel}.json`);
 }
 
-function saveConfig(config) {
-  writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + "\n");
+function loadChannel(channel) {
+  mkdirSync(CHANNELS_DIR, { recursive: true });
+  const p = channelPath(channel);
+  if (!existsSync(p)) {
+    return { agents: {} };
+  }
+  return JSON.parse(readFileSync(p, "utf-8"));
+}
+
+function saveChannel(channel, data) {
+  mkdirSync(CHANNELS_DIR, { recursive: true });
+  writeFileSync(channelPath(channel), JSON.stringify(data, null, 2) + "\n");
 }
 
 // Returns { session, pane } — detected once at startup since process tree is stable
@@ -75,9 +81,8 @@ function logHandoff(record) {
   appendFileSync(LOG_PATH, entry + "\n");
 }
 
-function getChannel(channel) {
-  const config = loadConfig();
-  return config.channels?.[channel]?.agents || {};
+function getAgents(channel) {
+  return loadChannel(channel).agents || {};
 }
 
 // Detect once at startup — stable for lifetime of this MCP server instance
@@ -106,7 +111,7 @@ server.tool(
     if (!myChannel) {
       return { content: [{ type: "text", text: "Not running inside tmux — cannot detect channel." }], isError: true };
     }
-    const agents = getChannel(myChannel);
+    const agents = getAgents(myChannel);
     const names = Object.keys(agents);
     if (names.length === 0) {
       return { content: [{ type: "text", text: `No agents on channel "${myChannel}" yet. Be the first — call register.` }] };
@@ -126,17 +131,14 @@ server.tool(
     if (!myChannel) {
       return { content: [{ type: "text", text: "Not running inside tmux — cannot detect channel/pane." }], isError: true };
     }
-    const config = loadConfig();
-    if (!config.channels) config.channels = {};
-    if (!config.channels[myChannel]) config.channels[myChannel] = { agents: {} };
-    const channelAgents = config.channels[myChannel].agents;
+    const channelData = loadChannel(myChannel);
 
-    if (channelAgents[name] && channelAgents[name].pane !== myPane) {
-      return { content: [{ type: "text", text: `Name "${name}" is already taken by pane ${channelAgents[name].pane} on channel "${myChannel}". Pick a different name.` }], isError: true };
+    if (channelData.agents[name] && channelData.agents[name].pane !== myPane) {
+      return { content: [{ type: "text", text: `Name "${name}" is already taken by pane ${channelData.agents[name].pane} on channel "${myChannel}". Pick a different name.` }], isError: true };
     }
-    channelAgents[name] = { pane: myPane };
-    saveConfig(config);
-    const others = Object.keys(channelAgents).filter((k) => k !== name);
+    channelData.agents[name] = { pane: myPane };
+    saveChannel(myChannel, channelData);
+    const others = Object.keys(channelData.agents).filter((k) => k !== name);
     return {
       content: [{ type: "text", text: `Registered as "${name}" on channel "${myChannel}" (pane ${myPane}). Other agents: ${others.length ? others.join(", ") : "none yet"}.` }],
     };
@@ -156,7 +158,7 @@ server.tool(
     if (!myChannel) {
       return { content: [{ type: "text", text: "Not running inside tmux." }], isError: true };
     }
-    const agents = getChannel(myChannel);
+    const agents = getAgents(myChannel);
     const pane = agents[next]?.pane;
     if (!pane) {
       const available = Object.keys(agents);
@@ -184,7 +186,7 @@ server.tool(
     if (!myChannel) {
       return { content: [{ type: "text", text: "Not running inside tmux." }], isError: true };
     }
-    const agents = getChannel(myChannel);
+    const agents = getAgents(myChannel);
     const pane = agents[to]?.pane;
     if (!pane) {
       const available = Object.keys(agents);
