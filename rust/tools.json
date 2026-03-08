@@ -1,0 +1,51 @@
+[
+  {
+    "name": "who",
+    "description": "List all agents on your channel.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  {
+    "name": "signal_done",
+    "description": "Hand off to another agent. Call 'who' first to see available agents.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "next": {
+          "type": "string",
+          "description": "Agent name to hand off to (call 'who' to see names)"
+        },
+        "summary": {
+          "type": "string",
+          "description": "What you just finished"
+        },
+        "request": {
+          "type": "string",
+          "description": "What you need the next agent to do"
+        }
+      },
+      "required": ["next", "summary", "request"]
+    }
+  },
+  {
+    "name": "send_message",
+    "description": "Send a message to another agent without handing off.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "to": {
+          "type": "string",
+          "description": "Agent name to message (call 'who' to see names)"
+        },
+        "message": {
+          "type": "string",
+          "description": "The message to send"
+        }
+      },
+      "required": ["to", "message"]
+    }
+  }
+]
