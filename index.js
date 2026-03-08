@@ -78,26 +78,41 @@ function getAgents(channel) {
   return loadChannel(channel).agents;
 }
 
+// Detect agent type by walking up the process tree looking for known agent binaries
+function detectAgentType() {
+  try {
+    let pid = process.pid;
+    while (pid && pid !== 1) {
+      const comm = execSync(`ps -o comm= -p ${pid}`, { timeout: 1000 }).toString().trim();
+      const name = comm.split("/").pop().toLowerCase();
+      if (name === "claude" || name.startsWith("claude-")) return "claude";
+      if (name.startsWith("codex")) return "codex";
+      if (name.startsWith("copilot")) return "copilot";
+      pid = parseInt(execSync(`ps -o ppid= -p ${pid}`, { timeout: 1000 }).toString().trim());
+    }
+  } catch {}
+  return "unknown";
+}
+
 // --- Startup: detect pane and auto-register ---
 
 const myLocation = detectPane();
 const myChannel = myLocation?.session || null;
 const myPane = myLocation?.pane || null;
+const myType = detectAgentType();
 let myName = null;
 
 if (myChannel) {
-  // Generate a unique name: agent-<random>
   const channelData = loadChannel(myChannel);
   const existing = new Set(Object.keys(channelData.agents));
 
-  // Generate random name, retry on collision (astronomically unlikely)
   do {
     myName = `agent-${randomBytes(3).toString("hex")}`;
   } while (existing.has(myName));
 
-  channelData.agents[myName] = { pane: myPane };
+  channelData.agents[myName] = { pane: myPane, type: myType };
   saveChannel(myChannel, channelData);
-  console.error(`agent-bus: registered as "${myName}" on channel "${myChannel}" (pane ${myPane})`);
+  console.error(`agent-bus: registered as "${myName}" [${myType}] on channel "${myChannel}" (pane ${myPane})`);
 } else {
   console.error("agent-bus: WARNING — not inside tmux, registration skipped");
 }
@@ -127,8 +142,9 @@ server.tool(
       return { content: [{ type: "text", text: `No agents on channel "${myChannel}".` }] };
     }
     const lines = names.map((n) => {
-      const marker = n === myName ? " (you)" : "";
-      return `- ${n}${marker} (pane ${agents[n].pane})`;
+      const you = n === myName ? " (you)" : "";
+      const type = agents[n].type ? ` [${agents[n].type}]` : "";
+      return `- ${n}${type}${you} (pane ${agents[n].pane})`;
     }).join("\n");
     return { content: [{ type: "text", text: `Channel "${myChannel}":\n${lines}` }] };
   }
