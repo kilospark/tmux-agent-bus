@@ -132,6 +132,7 @@ server.tool(
       return { content: [{ type: "text", text: "Not running inside tmux — cannot detect channel/pane." }], isError: true };
     }
     const channelData = loadChannel(myChannel);
+    if (!channelData.agents) channelData.agents = {};
 
     if (channelData.agents[name] && channelData.agents[name].pane !== myPane) {
       return { content: [{ type: "text", text: `Name "${name}" is already taken by pane ${channelData.agents[name].pane} on channel "${myChannel}". Pick a different name.` }], isError: true };
