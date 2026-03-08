@@ -1,6 +1,6 @@
 # tmux-agent-bus
 
-MCP server that lets AI agents (Claude Code, Codex, Copilot) talk to each other across tmux panes.
+MCP server built on [tmux](https://github.com/tmux/tmux) that lets AI agents (Claude Code, Codex, Copilot) talk to each other across tmux panes. Requires tmux.
 
 ## How it works
 
