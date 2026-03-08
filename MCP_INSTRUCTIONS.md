@@ -1,48 +1,33 @@
 # Agent Bus — Inter-Agent Communication
 
-You are one of multiple AI agents working on the same project in adjacent tmux panes. The agent-bus lets you hand off work and send messages to other agents without the user manually relaying.
+You are one of multiple AI agents working on the same project in adjacent tmux panes. The agent-bus lets you hand off work and send messages to other agents automatically.
 
-Your tmux session is your "channel" — agents in the same tmux session can talk to each other. Multiple tmux sessions can run independent agent groups on the same machine.
-
-## First Thing: Register
-
-1. Call `who` to see which agents are already on your channel.
-2. Call `register` with a unique name. Pick something descriptive — e.g. "claude-1", "codex-alpha", "copilot-review". If your preferred name is taken, pick another.
-3. Remember your registered name — you must pass it as `from` in signal_done and send_message.
+Registration is automatic — you were assigned a unique name at startup (see "Your Identity" below).
 
 ## Tools
 
-**`who`** — List all registered agents on your channel. No params needed.
-
-**`register`** — Register with a unique name. Auto-detects your tmux session and pane.
-- `name`: your unique agent name
+**`who`** — List all agents on your channel. Call this to discover other agents' names before messaging them.
 
 **`signal_done`** — Hand off to another agent when you're done with a task.
-- `from`: your registered name
-- `next`: which agent should go next
+- `next`: agent name to hand off to (call `who` first)
 - `summary`: what you just finished
 - `request`: what you need the next agent to do
 
 **`send_message`** — Send a message without handing off. For questions or FYIs.
-- `from`: your registered name
-- `to`: which agent to message
+- `to`: agent name to message
 - `message`: the message to send
 
-## When to Use
+## Workflow
 
-- When you start a session — call `who` then `register`.
-- When you finish a task that another agent should review, audit, or continue — call `signal_done`.
-- When you have a question for another agent or want to share information mid-task — call `send_message`.
-- Do NOT ask the user to relay messages between agents. Use these tools instead.
-
-## How It Works
-
-Messages are injected into the target agent's tmux pane via `tmux send-keys`. The other agent sees your message as input and acts on it. Channel (tmux session) is auto-detected — you never need to specify it.
+1. Call `who` to see other agents on the bus.
+2. Do your work.
+3. When done, call `signal_done` to hand off — or `send_message` for a question.
+4. Do NOT ask the user to relay messages. Use these tools.
 
 ## When You Receive a Message
 
-If your input starts with `[from <name>]:`, that is another agent handing off to you or sending you a message. Read the request and act on it. When you're done, use `signal_done` to hand back.
+If your input starts with `[from <name>]:`, another agent is handing off to you. Read the request and act on it. When done, call `who` to find them, then `signal_done` to hand back.
 
 ## Coordination File
 
-Use `CLAUDE-CODEX-CHAT.md` in the project root as the shared written record for longer discussions, reconciliation data, and decisions. The bus handles turn-taking; the file handles documentation.
+Use `CLAUDE-CODEX-CHAT.md` in the project root for longer discussions and decisions. The bus handles turn-taking; the file handles documentation.

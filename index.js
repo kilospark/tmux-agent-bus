@@ -2,6 +2,7 @@
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync, appendFileSync } from "fs";
 import { execSync } from "child_process";
+import { randomBytes } from "crypto";
 import { homedir } from "os";
 import { join, dirname } from "path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -10,7 +11,6 @@ import { z } from "zod";
 import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const INSTRUCTIONS = readFileSync(join(__dirname, "MCP_INSTRUCTIONS.md"), "utf-8");
 
 const BUS_DIR = join(homedir(), ".agent-bus");
 const CHANNELS_DIR = join(BUS_DIR, "channels");
@@ -23,10 +23,10 @@ function channelPath(channel) {
 function loadChannel(channel) {
   mkdirSync(CHANNELS_DIR, { recursive: true });
   const p = channelPath(channel);
-  if (!existsSync(p)) {
-    return { agents: {} };
-  }
-  return JSON.parse(readFileSync(p, "utf-8"));
+  if (!existsSync(p)) return { agents: {} };
+  const data = JSON.parse(readFileSync(p, "utf-8"));
+  if (!data.agents) data.agents = {};
+  return data;
 }
 
 function saveChannel(channel, data) {
@@ -34,7 +34,6 @@ function saveChannel(channel, data) {
   writeFileSync(channelPath(channel), JSON.stringify(data, null, 2) + "\n");
 }
 
-// Returns { session, pane } — detected once at startup since process tree is stable
 function detectPane() {
   try {
     const paneList = execSync(
@@ -50,16 +49,10 @@ function detectPane() {
 
     let pid = process.pid;
     while (pid && pid !== 1) {
-      if (paneMap[String(pid)]) {
-        return paneMap[String(pid)];
-      }
+      if (paneMap[String(pid)]) return paneMap[String(pid)];
       try {
-        pid = parseInt(
-          execSync(`ps -o ppid= -p ${pid}`, { timeout: 1000 }).toString().trim()
-        );
-      } catch {
-        break;
-      }
+        pid = parseInt(execSync(`ps -o ppid= -p ${pid}`, { timeout: 1000 }).toString().trim());
+      } catch { break; }
     }
   } catch {}
   return null;
@@ -82,126 +75,135 @@ function logHandoff(record) {
 }
 
 function getAgents(channel) {
-  return loadChannel(channel).agents || {};
+  return loadChannel(channel).agents;
 }
 
-// Detect once at startup — stable for lifetime of this MCP server instance
+// --- Startup: detect pane and auto-register ---
+
 const myLocation = detectPane();
 const myChannel = myLocation?.session || null;
 const myPane = myLocation?.pane || null;
+let myName = null;
 
 if (myChannel) {
-  console.error(`agent-bus: detected channel "${myChannel}" pane ${myPane}`);
+  // Generate a unique name: agent-<random>
+  const channelData = loadChannel(myChannel);
+  const existing = new Set(Object.keys(channelData.agents));
+
+  // Generate random name, retry on collision (astronomically unlikely)
+  do {
+    myName = `agent-${randomBytes(3).toString("hex")}`;
+  } while (existing.has(myName));
+
+  channelData.agents[myName] = { pane: myPane };
+  saveChannel(myChannel, channelData);
+  console.error(`agent-bus: registered as "${myName}" on channel "${myChannel}" (pane ${myPane})`);
 } else {
-  console.error("agent-bus: WARNING — could not detect tmux pane");
+  console.error("agent-bus: WARNING — not inside tmux, registration skipped");
 }
+
+// Build instructions with this agent's identity baked in
+const INSTRUCTIONS = readFileSync(join(__dirname, "MCP_INSTRUCTIONS.md"), "utf-8")
+  + `\n\n## Your Identity\n\nYou are registered as **${myName}** on channel **${myChannel}**. Use "${myName}" when others need to message you. You do not need to register — it happened automatically.\n`;
 
 const server = new McpServer({
   name: "agent-bus",
-  version: "0.4.0",
+  version: "0.5.0",
 }, {
   instructions: INSTRUCTIONS,
 });
 
 server.tool(
   "who",
-  "List all agents registered on your channel (tmux session). No parameters needed — channel is auto-detected.",
+  "List all agents on your channel.",
   {},
   async () => {
     if (!myChannel) {
-      return { content: [{ type: "text", text: "Not running inside tmux — cannot detect channel." }], isError: true };
+      return { content: [{ type: "text", text: "Not running inside tmux." }], isError: true };
     }
     const agents = getAgents(myChannel);
     const names = Object.keys(agents);
     if (names.length === 0) {
-      return { content: [{ type: "text", text: `No agents on channel "${myChannel}" yet. Be the first — call register.` }] };
+      return { content: [{ type: "text", text: `No agents on channel "${myChannel}".` }] };
     }
-    const lines = names.map((n) => `- ${n} (pane ${agents[n].pane})`).join("\n");
-    return { content: [{ type: "text", text: `Channel "${myChannel}" agents:\n${lines}` }] };
-  }
-);
-
-server.tool(
-  "register",
-  "Register this agent with the bus. Auto-detects your tmux session (channel) and pane. Pick a unique name — call 'who' first to see what's taken.",
-  {
-    name: z.string().describe("Your unique agent name, e.g. 'claude-1', 'codex-alpha'. Must be unique on the channel."),
-  },
-  async ({ name }) => {
-    if (!myChannel) {
-      return { content: [{ type: "text", text: "Not running inside tmux — cannot detect channel/pane." }], isError: true };
-    }
-    const channelData = loadChannel(myChannel);
-    if (!channelData.agents) channelData.agents = {};
-
-    if (channelData.agents[name] && channelData.agents[name].pane !== myPane) {
-      return { content: [{ type: "text", text: `Name "${name}" is already taken by pane ${channelData.agents[name].pane} on channel "${myChannel}". Pick a different name.` }], isError: true };
-    }
-    channelData.agents[name] = { pane: myPane };
-    saveChannel(myChannel, channelData);
-    const others = Object.keys(channelData.agents).filter((k) => k !== name);
-    return {
-      content: [{ type: "text", text: `Registered as "${name}" on channel "${myChannel}" (pane ${myPane}). Other agents: ${others.length ? others.join(", ") : "none yet"}.` }],
-    };
+    const lines = names.map((n) => {
+      const marker = n === myName ? " (you)" : "";
+      return `- ${n}${marker} (pane ${agents[n].pane})`;
+    }).join("\n");
+    return { content: [{ type: "text", text: `Channel "${myChannel}":\n${lines}` }] };
   }
 );
 
 server.tool(
   "signal_done",
-  "Signal that you are done with your task and hand off to another agent on your channel.",
+  "Hand off to another agent. Call 'who' first to see available agents.",
   {
-    from: z.string().describe("Your registered agent name"),
-    next: z.string().describe("Which agent should go next"),
+    next: z.string().describe("Agent name to hand off to (call 'who' to see names)"),
     summary: z.string().describe("What you just finished"),
     request: z.string().describe("What you need the next agent to do"),
   },
-  async ({ from, next, summary, request }) => {
+  async ({ next, summary, request }) => {
     if (!myChannel) {
       return { content: [{ type: "text", text: "Not running inside tmux." }], isError: true };
     }
     const agents = getAgents(myChannel);
     const pane = agents[next]?.pane;
     if (!pane) {
-      const available = Object.keys(agents);
-      return { content: [{ type: "text", text: `Unknown agent "${next}" on channel "${myChannel}". Registered: ${available.length ? available.join(", ") : "none"}.` }], isError: true };
+      const available = Object.keys(agents).filter((n) => n !== myName);
+      return { content: [{ type: "text", text: `Unknown agent "${next}". Available: ${available.length ? available.join(", ") : "none"}.` }], isError: true };
     }
-    const message = `[from ${from}]: ${summary} Request: ${request}`;
+    const message = `[from ${myName}]: ${summary} Request: ${request}`;
     const result = sendToPane(pane, message);
-    logHandoff({ type: "signal_done", channel: myChannel, from, to: next, summary, request });
+    logHandoff({ type: "signal_done", channel: myChannel, from: myName, to: next, summary, request });
     if (!result.success) {
       return { content: [{ type: "text", text: `Failed to reach ${next}: ${result.error}` }], isError: true };
     }
-    return { content: [{ type: "text", text: `Handed off to ${next} on channel "${myChannel}" (pane ${pane}).` }] };
+    return { content: [{ type: "text", text: `Handed off to ${next} (pane ${pane}).` }] };
   }
 );
 
 server.tool(
   "send_message",
-  "Send a message to another agent on your channel without handing off. Use for mid-task questions or FYIs.",
+  "Send a message to another agent without handing off.",
   {
-    from: z.string().describe("Your registered agent name"),
-    to: z.string().describe("Which agent to message"),
+    to: z.string().describe("Agent name to message (call 'who' to see names)"),
     message: z.string().describe("The message to send"),
   },
-  async ({ from, to, message }) => {
+  async ({ to, message }) => {
     if (!myChannel) {
       return { content: [{ type: "text", text: "Not running inside tmux." }], isError: true };
     }
     const agents = getAgents(myChannel);
     const pane = agents[to]?.pane;
     if (!pane) {
-      const available = Object.keys(agents);
-      return { content: [{ type: "text", text: `Unknown agent "${to}" on channel "${myChannel}". Registered: ${available.length ? available.join(", ") : "none"}.` }], isError: true };
+      const available = Object.keys(agents).filter((n) => n !== myName);
+      return { content: [{ type: "text", text: `Unknown agent "${to}". Available: ${available.length ? available.join(", ") : "none"}.` }], isError: true };
     }
-    const fullMessage = `[message from ${from}]: ${message}`;
+    const fullMessage = `[message from ${myName}]: ${message}`;
     const result = sendToPane(pane, fullMessage);
-    logHandoff({ type: "send_message", channel: myChannel, from, to, message });
+    logHandoff({ type: "send_message", channel: myChannel, from: myName, to, message });
     if (!result.success) {
       return { content: [{ type: "text", text: `Failed to reach ${to}: ${result.error}` }], isError: true };
     }
-    return { content: [{ type: "text", text: `Message sent to ${to} on channel "${myChannel}" (pane ${pane}).` }] };
+    return { content: [{ type: "text", text: `Message sent to ${to} (pane ${pane}).` }] };
   }
 );
+
+// Cleanup: remove self from channel on exit
+function cleanup() {
+  if (myChannel && myName) {
+    try {
+      const channelData = loadChannel(myChannel);
+      delete channelData.agents[myName];
+      saveChannel(myChannel, channelData);
+      console.error(`agent-bus: unregistered "${myName}" from channel "${myChannel}"`);
+    } catch {}
+  }
+}
+
+process.on("exit", cleanup);
+process.on("SIGINT", () => { cleanup(); process.exit(0); });
+process.on("SIGTERM", () => { cleanup(); process.exit(0); });
 
 async function main() {
   const transport = new StdioServerTransport();
