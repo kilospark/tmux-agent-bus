@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync, appendFileSync } from "fs";
+import { execSync } from "child_process";
 import { homedir } from "os";
 import { join } from "path";
 
@@ -22,4 +23,19 @@ function loadConfig() {
     return defaultConfig;
   }
   return JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
+}
+
+function sendToPane(pane, message) {
+  try {
+    execSync(`tmux send-keys -t ${JSON.stringify(pane)} -l ${JSON.stringify(message)}`, { timeout: 5000 });
+    execSync(`tmux send-keys -t ${JSON.stringify(pane)} Enter`, { timeout: 5000 });
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+}
+
+function logHandoff(record) {
+  const entry = JSON.stringify({ ts: new Date().toISOString(), ...record });
+  appendFileSync(LOG_PATH, entry + "\n");
 }
