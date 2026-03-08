@@ -156,23 +156,42 @@ fn capture_pane(pane: &str) -> String {
 fn try_send(pane: &str, sanitized: &str) -> Result<bool> {
     let before = capture_pane(pane);
 
+    // Send text as literal (avoids key-name interpretation)
     let status = Command::new("tmux")
-        .args([
-            "send-keys", "-t", pane, "-l", sanitized, ";",
-            "send-keys", "-t", pane, "Enter",
-        ])
+        .args(["send-keys", "-t", pane, "-l", sanitized])
         .status()
-        .context("failed to run tmux send-keys")?;
+        .context("failed to run tmux send-keys (text)")?;
     if !status.success() {
-        anyhow::bail!("tmux send-keys failed");
+        anyhow::bail!("tmux send-keys failed (text)");
     }
 
-    // Poll for ack: check that pane content changed
+    // Small delay to let the paste complete before sending Enter
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
+    // Send Enter separately so it's not swallowed by bracketed paste
+    let status = Command::new("tmux")
+        .args(["send-keys", "-t", pane, "Enter"])
+        .status()
+        .context("failed to run tmux send-keys (Enter)")?;
+    if !status.success() {
+        anyhow::bail!("tmux send-keys failed (Enter)");
+    }
+
+    // Poll for ack: wait for pane content to change at least twice —
+    // first change is the text appearing in the input box,
+    // second change is the agent processing it (spinner, output, etc.)
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let first_change = capture_pane(pane);
     for _ in 0..6 {
-        std::thread::sleep(std::time::Duration::from_millis(250));
-        if capture_pane(pane) != before {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let current = capture_pane(pane);
+        if current != before && current != first_change {
             return Ok(true);
         }
+    }
+    // Accept single change as partial success if content did change
+    if first_change != before {
+        return Ok(true);
     }
     Ok(false)
 }
