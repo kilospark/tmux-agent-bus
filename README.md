@@ -8,8 +8,8 @@ Each agent spawns its own tmux-agent-bus MCP server. On startup, the server:
 1. Detects which tmux pane and session it's in
 2. Detects the agent type (claude/codex/copilot) from the process tree
 3. Auto-registers with a human-readable name (`claude-1`, `codex-1`, etc.)
-4. Sets a tmux pane option (`@agent-name`) so you can see who's who in pane borders
-5. Cleans up on exit
+4. Sets tmux pane options (`@agent-name`, `@agent-type`) — this is the registration
+5. Cleans up pane options on exit
 
 Agents communicate by calling `signal_done` or `send_message`, which injects text into the target agent's tmux pane via `tmux send-keys`.
 
@@ -40,19 +40,18 @@ set -g pane-border-status top
 | `signal_done` | Hand off to another agent with summary and request |
 | `send_message` | Send a message without handing off |
 
+Use `"@all"` as the target to broadcast to all agents on the channel.
+
 ## Architecture
 
 - **Channel** = tmux session. Agents in the same session see each other.
-- **Registration** = automatic. Name assigned at startup, pane option set.
-- **Routing** = `tmux send-keys`. Messages typed into the target pane's stdin.
-- **State** = one JSON file per channel at `~/.agent-bus/channels/<session>.json`
-- **Cleanup** = agents unregister on exit. No stale entries.
+- **Registration** = tmux pane options (`@agent-name`, `@agent-type`). No JSON registry — tmux is the source of truth.
+- **Routing** = `tmux list-panes` to find panes by `@agent-name`, then `tmux send-keys` to deliver.
+- **Cleanup** = pane options cleared on exit. No stale entries possible.
 
 ## Files
 
 ```
 ~/.agent-bus/
-  channels/
-    0.json          # channel registry (one per tmux session)
   history.jsonl     # log of all handoffs and messages
 ```

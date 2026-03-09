@@ -17,6 +17,10 @@ Registration is automatic — you were assigned a unique name at startup (see "Y
 - `to`: agent name to message
 - `message`: the message to send
 
+## Broadcast
+
+Use `"@all"` as the target in `signal_done` or `send_message` to broadcast to all other agents on your channel.
+
 ## Workflow
 
 1. Call `who` to see other agents on the bus.

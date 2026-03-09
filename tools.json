@@ -10,13 +10,13 @@
   },
   {
     "name": "signal_done",
-    "description": "Hand off to another agent. Call 'who' first to see available agents.",
+    "description": "Hand off to another agent. Use \"@all\" to broadcast to all agents on the channel.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "next": {
           "type": "string",
-          "description": "Agent name to hand off to (call 'who' to see names)"
+          "description": "Agent name to hand off to, or \"@all\" to broadcast"
         },
         "summary": {
           "type": "string",
@@ -32,13 +32,13 @@
   },
   {
     "name": "send_message",
-    "description": "Send a message to another agent without handing off.",
+    "description": "Send a message to another agent without handing off. Use \"@all\" to broadcast.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "to": {
           "type": "string",
-          "description": "Agent name to message (call 'who' to see names)"
+          "description": "Agent name to message, or \"@all\" to broadcast"
         },
         "message": {
           "type": "string",

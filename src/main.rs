@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::fs;
 use std::io::{self, BufRead, Write as IoWrite};
 use std::process::Command;
@@ -13,37 +12,9 @@ fn bus_dir() -> std::path::PathBuf {
     dirs::home_dir().unwrap_or_default().join(".agent-bus")
 }
 
-fn channels_dir() -> std::path::PathBuf {
-    bus_dir().join("channels")
-}
-
-fn channel_path(channel: &str) -> std::path::PathBuf {
-    channels_dir().join(format!("{channel}.json"))
-}
-
-fn load_channel(channel: &str) -> Value {
-    let _ = fs::create_dir_all(channels_dir());
-    let p = channel_path(channel);
-    match fs::read_to_string(&p) {
-        Ok(s) => {
-            let mut data: Value = serde_json::from_str(&s).unwrap_or(json!({}));
-            if data.get("agents").is_none() {
-                data["agents"] = json!({});
-            }
-            data
-        }
-        Err(_) => json!({ "agents": {} }),
-    }
-}
-
-fn save_channel(channel: &str, data: &Value) {
-    let _ = fs::create_dir_all(channels_dir());
-    let s = serde_json::to_string_pretty(data).unwrap_or_default() + "\n";
-    let _ = fs::write(channel_path(channel), s);
-}
-
 fn log_handoff(record: &Value) {
     let log_path = bus_dir().join("history.jsonl");
+    let _ = fs::create_dir_all(bus_dir());
     let mut entry = record.clone();
     entry["ts"] = json!(iso_now());
     let line = serde_json::to_string(&entry).unwrap_or_default() + "\n";
@@ -63,6 +34,67 @@ fn iso_now() -> String {
         Err(_) => String::new(),
     }
 }
+
+// --- Agent info from live tmux state ---
+
+struct PaneAgent {
+    name: String,
+    agent_type: String,
+    pane: String,
+    session: String,
+}
+
+/// Query tmux for all panes that have @agent-name set.
+/// Returns live agent info — no stale entries possible.
+fn list_agents() -> Vec<PaneAgent> {
+    let output = Command::new("tmux")
+        .args([
+            "list-panes", "-a", "-F",
+            "#{@agent-name}\t#{@agent-type}\t#{session_name}:#{window_index}.#{pane_index}\t#{session_name}",
+        ])
+        .output();
+
+    let output = match output {
+        Ok(o) if o.status.success() => o,
+        _ => return vec![],
+    };
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.trim()
+        .lines()
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() == 4 && !parts[0].is_empty() {
+                Some(PaneAgent {
+                    name: parts[0].to_string(),
+                    agent_type: parts[1].to_string(),
+                    pane: parts[2].to_string(),
+                    session: parts[3].to_string(),
+                })
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Find the pane for a given agent name (across all sessions).
+fn find_agent(name: &str) -> Option<String> {
+    list_agents()
+        .into_iter()
+        .find(|a| a.name == name)
+        .map(|a| a.pane)
+}
+
+/// List agents on a given session (channel), excluding self.
+fn agents_on_channel(session: &str, exclude: &str) -> Vec<PaneAgent> {
+    list_agents()
+        .into_iter()
+        .filter(|a| a.session == session && a.name != exclude)
+        .collect()
+}
+
+// --- Process tree walking ---
 
 /// Walk process tree to find which tmux pane we're in.
 /// Returns (pane_id, session_name).
@@ -145,6 +177,8 @@ fn parent_pid(pid: u32) -> Option<u32> {
         })
 }
 
+// --- Message sending ---
+
 fn capture_pane(pane: &str) -> String {
     Command::new("tmux")
         .args(["capture-pane", "-t", pane, "-p"])
@@ -192,20 +226,27 @@ fn send_to_pane(pane: &str, message: &str) -> Result<bool> {
     try_send(pane, &sanitized)
 }
 
+// --- Registration ---
+
 struct AgentState {
     name: Option<String>,
+    pane: Option<String>,
     channel: Option<String>,
 }
 
 impl Drop for AgentState {
     fn drop(&mut self) {
-        if let (Some(channel), Some(name)) = (&self.channel, &self.name) {
-            let mut data = load_channel(channel);
-            if let Some(agents) = data["agents"].as_object_mut() {
-                agents.remove(name);
+        if let Some(pane) = &self.pane {
+            // Clear pane options on exit
+            let _ = Command::new("tmux")
+                .args(["set-option", "-pu", "-t", pane, "@agent-name"])
+                .status();
+            let _ = Command::new("tmux")
+                .args(["set-option", "-pu", "-t", pane, "@agent-type"])
+                .status();
+            if let Some(name) = &self.name {
+                eprintln!("tmux-agent-bus: unregistered \"{name}\"");
             }
-            save_channel(channel, &data);
-            eprintln!("tmux-agent-bus: unregistered \"{name}\" from channel \"{channel}\"");
         }
     }
 }
@@ -214,31 +255,34 @@ fn register() -> AgentState {
     let (pane, session) = match detect_pane() {
         Some(v) => v,
         None => {
-            return AgentState { name: None, channel: None };
+            return AgentState { name: None, pane: None, channel: None };
         }
     };
 
     let agent_type = detect_agent_type();
-    let mut data = load_channel(&session);
-    let existing: HashSet<String> = data["agents"]
-        .as_object()
-        .map(|m| m.keys().cloned().collect())
-        .unwrap_or_default();
+
+    // Check existing agent names across this session to pick a unique name
+    let existing_names: std::collections::HashSet<String> = list_agents()
+        .into_iter()
+        .filter(|a| a.session == session)
+        .map(|a| a.name)
+        .collect();
 
     let mut n = 1u32;
     let name = loop {
         let candidate = format!("{agent_type}-{n}");
-        if !existing.contains(&candidate) {
+        if !existing_names.contains(&candidate) {
             break candidate;
         }
         n += 1;
     };
 
-    data["agents"][&name] = json!({ "pane": pane, "type": agent_type });
-    save_channel(&session, &data);
-
+    // Set pane options — this IS the registration. No JSON file needed.
     let _ = Command::new("tmux")
         .args(["set-option", "-p", "-t", &pane, "@agent-name", &name])
+        .status();
+    let _ = Command::new("tmux")
+        .args(["set-option", "-p", "-t", &pane, "@agent-type", &agent_type])
         .status();
 
     // Enable pane borders for this window if not already on
@@ -261,6 +305,7 @@ fn register() -> AgentState {
 
     AgentState {
         name: Some(name),
+        pane: Some(pane),
         channel: Some(session),
     }
 }
@@ -272,22 +317,22 @@ fn handle_who(state: &AgentState) -> Value {
         Some(c) => c,
         None => return err_result("Not running inside tmux."),
     };
-    let data = load_channel(channel);
-    let agents = match data["agents"].as_object() {
-        Some(m) if !m.is_empty() => m,
-        _ => return ok_result(&format!("No agents on channel \"{channel}\".")),
-    };
+    let my_name = state.name.as_deref().unwrap_or("unknown");
+    let agents = list_agents();
+    let on_channel: Vec<&PaneAgent> = agents.iter().filter(|a| a.session == *channel).collect();
 
-    let lines: Vec<String> = agents
+    if on_channel.is_empty() {
+        return ok_result(&format!("No agents on channel \"{channel}\"."));
+    }
+
+    let lines: Vec<String> = on_channel
         .iter()
-        .map(|(n, info)| {
-            let you = if Some(n) == state.name.as_ref() { " (you)" } else { "" };
-            let t = info["type"].as_str().unwrap_or("");
-            let p = info["pane"].as_str().unwrap_or("");
-            format!("- {n} [{t}]{you} (pane {p})")
+        .map(|a| {
+            let you = if a.name == my_name { " (you)" } else { "" };
+            format!("- {} [{}]{} (pane {})", a.name, a.agent_type, you, a.pane)
         })
         .collect();
-    ok_result(&format!("Channel \"{channel}\":\n{}", lines.join("\n")))
+    ok_result(&format!("Channel \"{channel}\":\n{}\n\nUse \"@all\" to broadcast to all agents.", lines.join("\n")))
 }
 
 fn handle_signal_done(state: &AgentState, args: &Value) -> Value {
@@ -299,22 +344,26 @@ fn handle_signal_done(state: &AgentState, args: &Value) -> Value {
     let summary = args["summary"].as_str().unwrap_or_default();
     let request = args["request"].as_str().unwrap_or_default();
     let my_name = state.name.as_deref().unwrap_or("unknown");
+    let message = format!("[from {my_name}]: {summary} Request: {request}");
 
-    let data = load_channel(channel);
-    match data["agents"][next]["pane"].as_str() {
+    log_handoff(&json!({
+        "type": "signal_done", "channel": channel,
+        "from": my_name, "to": next, "summary": summary, "request": request
+    }));
+
+    if next == "@all" {
+        return broadcast(channel, my_name, &message);
+    }
+
+    match find_agent(next) {
         None => {
-            let available = available_agents(&data, my_name);
+            let available = available_agents(channel, my_name);
             err_result(&format!("Unknown agent \"{next}\". Available: {available}."))
         }
         Some(pane) => {
-            let message = format!("[from {my_name}]: {summary} Request: {request}");
-            log_handoff(&json!({
-                "type": "signal_done", "channel": channel,
-                "from": my_name, "to": next, "summary": summary, "request": request
-            }));
-            match send_to_pane(pane, &message) {
+            match send_to_pane(&pane, &message) {
                 Ok(true) => ok_result(&format!("Handed off to {next} (pane {pane}). Ack: message received.")),
-                Ok(false) => err_result(&format!("Message sent to {next} (pane {pane}) but no ack after 2 attempts — message could not be delivered.")),
+                Ok(false) => err_result(&format!("Message sent to {next} (pane {pane}) but no ack — message could not be delivered.")),
                 Err(e) => err_result(&format!("Failed to reach {next}: {e}")),
             }
         }
@@ -329,40 +378,70 @@ fn handle_send_message(state: &AgentState, args: &Value) -> Value {
     let to = args["to"].as_str().unwrap_or_default();
     let message = args["message"].as_str().unwrap_or_default();
     let my_name = state.name.as_deref().unwrap_or("unknown");
+    let full_message = format!("[message from {my_name}]: {message}");
 
-    let data = load_channel(channel);
-    match data["agents"][to]["pane"].as_str() {
+    log_handoff(&json!({
+        "type": "send_message", "channel": channel,
+        "from": my_name, "to": to, "message": message
+    }));
+
+    if to == "@all" {
+        return broadcast(channel, my_name, &full_message);
+    }
+
+    match find_agent(to) {
         None => {
-            let available = available_agents(&data, my_name);
+            let available = available_agents(channel, my_name);
             err_result(&format!("Unknown agent \"{to}\". Available: {available}."))
         }
         Some(pane) => {
-            let full_message = format!("[message from {my_name}]: {message}");
-            log_handoff(&json!({
-                "type": "send_message", "channel": channel,
-                "from": my_name, "to": to, "message": message
-            }));
-            match send_to_pane(pane, &full_message) {
+            match send_to_pane(&pane, &full_message) {
                 Ok(true) => ok_result(&format!("Message sent to {to} (pane {pane}). Ack: message received.")),
-                Ok(false) => err_result(&format!("Message sent to {to} (pane {pane}) but no ack after 2 attempts — message could not be delivered.")),
+                Ok(false) => err_result(&format!("Message sent to {to} (pane {pane}) but no ack — message could not be delivered.")),
                 Err(e) => err_result(&format!("Failed to reach {to}: {e}")),
             }
         }
     }
 }
 
-fn available_agents(data: &Value, exclude: &str) -> String {
-    data["agents"]
-        .as_object()
-        .map(|m| {
-            let names: Vec<&String> = m.keys().filter(|n| n.as_str() != exclude).collect();
-            if names.is_empty() {
-                "none".to_string()
-            } else {
-                names.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
-            }
-        })
-        .unwrap_or_else(|| "none".to_string())
+fn broadcast(channel: &str, my_name: &str, message: &str) -> Value {
+    let targets = agents_on_channel(channel, my_name);
+    if targets.is_empty() {
+        return err_result("No other agents on this channel to broadcast to.");
+    }
+
+    let mut delivered = Vec::new();
+    let mut failed = Vec::new();
+
+    for agent in &targets {
+        match send_to_pane(&agent.pane, message) {
+            Ok(true) => delivered.push(agent.name.as_str()),
+            Ok(false) | Err(_) => failed.push(agent.name.as_str()),
+        }
+    }
+
+    let mut result = format!("Broadcast to {} agent(s).", targets.len());
+    if !delivered.is_empty() {
+        result.push_str(&format!(" Delivered: {}.", delivered.join(", ")));
+    }
+    if !failed.is_empty() {
+        result.push_str(&format!(" Failed: {}.", failed.join(", ")));
+    }
+
+    if failed.is_empty() {
+        ok_result(&result)
+    } else {
+        err_result(&result)
+    }
+}
+
+fn available_agents(channel: &str, exclude: &str) -> String {
+    let agents = agents_on_channel(channel, exclude);
+    if agents.is_empty() {
+        "none".to_string()
+    } else {
+        agents.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", ")
+    }
 }
 
 fn ok_result(text: &str) -> Value {
