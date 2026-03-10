@@ -188,16 +188,24 @@ fn capture_pane(pane: &str) -> String {
 fn try_send(pane: &str, sanitized: &str) -> Result<bool> {
     let before = capture_pane(pane);
 
-    // Send text WITHOUT -l to avoid bracketed paste. Each arg that isn't a
-    // recognized key name is sent as individual characters. Since the full
-    // message is a single arg, it won't match any key name. Then "Enter"
-    // as a separate arg sends a real Enter keypress.
+    // Send text first, then Enter separately after a short delay so the
+    // target has time to process the content before submission.
     let status = Command::new("tmux")
-        .args(["send-keys", "-t", pane, "--", sanitized, "Enter"])
+        .args(["send-keys", "-t", pane, "--", sanitized])
         .status()
-        .context("failed to run tmux send-keys")?;
+        .context("failed to run tmux send-keys (text)")?;
     if !status.success() {
-        anyhow::bail!("tmux send-keys failed");
+        anyhow::bail!("tmux send-keys failed (text)");
+    }
+
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    let status = Command::new("tmux")
+        .args(["send-keys", "-t", pane, "Enter"])
+        .status()
+        .context("failed to run tmux send-keys (Enter)")?;
+    if !status.success() {
+        anyhow::bail!("tmux send-keys failed (Enter)");
     }
 
     // Poll for ack: wait for pane to show the message was processed
