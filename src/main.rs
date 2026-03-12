@@ -125,6 +125,9 @@ fn detect_agent_type() -> String {
             if name.starts_with("copilot") {
                 return "copilot".into();
             }
+            if name == "agent" {
+                return "agent".into();
+            }
         }
         match parent_pid(pid) {
             Some(ppid) if ppid != pid => pid = ppid,
