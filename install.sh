@@ -137,9 +137,13 @@ migrate_mcp_config() {
   fi
 
   if python3 -c "
-import json, sys
+import json, re, sys
 with open(sys.argv[1], 'r') as f:
-    cfg = json.load(f)
+    raw = f.read()
+try:
+    cfg = json.loads(raw)
+except json.JSONDecodeError:
+    cfg = json.loads(re.sub(r',(\s*[}\]])', r'\1', raw))
 servers = cfg.get('mcpServers', {})
 if sys.argv[2] in servers:
     del servers[sys.argv[2]]
@@ -183,8 +187,29 @@ add_mcp_config() {
     return
   fi
 
-  content="$(cat "$config_file")"
+  if command -v python3 >/dev/null 2>&1; then
+    if python3 -c "
+import json, re, sys
+p, cmd = sys.argv[1], sys.argv[2]
+with open(p) as f:
+    raw = f.read()
+try:
+    data = json.loads(raw)
+except json.JSONDecodeError:
+    data = json.loads(re.sub(r',(\s*[}\]])', r'\1', raw))
+data.setdefault('mcpServers', {})['agent-bus'] = {'command': cmd}
+with open(p, 'w') as f:
+    json.dump(data, f, indent=2)
+    f.write('\n')
+" "$config_file" "$BINARY_PATH" 2>/dev/null; then
+      echo "  $client_name: configured"
+      CONFIGURED="${CONFIGURED}${client_name}, "
+      return
+    fi
+  fi
 
+  # Fallback: sed-based insertion (works for well-formed single-line JSON)
+  content="$(cat "$config_file")"
   escaped_path="$(echo "$BINARY_PATH" | sed 's/[\/&]/\\&/g')"
 
   if echo "$content" | grep -q '"mcpServers"'; then
