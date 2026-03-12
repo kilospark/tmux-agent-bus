@@ -4,39 +4,27 @@ REMOVED=""
 
 echo "Uninstalling agent-bus (cleaning up all versions)..."
 
-# --- Remove binaries (current and old names) ---
+# --- Remove binaries (current + old "tmux-agent-bus" name) ---
 
 for dir in /usr/local/bin "$HOME/.local/bin"; do
-  for bin in agent-bus tmux-agent-bus; do
-    if [ -x "$dir/$bin" ]; then
+  for bin in tmux-agent-bus agent-bus; do
+    if [ -x "$dir/${bin}" ]; then
       if [ -w "$dir" ]; then
-        rm "$dir/$bin"
-        echo "Removed $dir/$bin"
-        REMOVED="${REMOVED}binary, "
+        rm "$dir/${bin}"
+        echo "Removed $dir/${bin}"
+        REMOVED="${REMOVED}${bin}, "
       elif [ -e /dev/tty ] && sudo -v < /dev/tty 2>/dev/null; then
-        sudo rm "$dir/$bin" < /dev/tty
-        echo "Removed $dir/$bin"
-        REMOVED="${REMOVED}binary, "
+        sudo rm "$dir/${bin}" < /dev/tty
+        echo "Removed $dir/${bin}"
+        REMOVED="${REMOVED}${bin}, "
       else
-        echo "WARNING: cannot remove $dir/$bin (no write access)"
+        echo "WARNING: cannot remove $dir/${bin} (no write access)"
       fi
     fi
   done
 done
 
-# --- Remove old Node.js version ---
-
-OLD_DIRS="$HOME/src/agent-bus $HOME/src/tmux-agent-bus/node_modules"
-for dir in $OLD_DIRS; do
-  if [ -d "$dir" ] && [ -f "$dir/index.js" ]; then
-    echo "Found old Node.js version at $dir"
-    rm -rf "$dir"
-    echo "Removed $dir"
-    REMOVED="${REMOVED}old-node, "
-  fi
-done
-
-# --- Remove PATH entries from shell rc (both old and new installer comments) ---
+# --- Remove PATH entry from shell rc ---
 
 for rc in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile"; do
   if [ -f "$rc" ]; then
@@ -52,7 +40,6 @@ with open(p) as f:
 out, i = [], 0
 while i < len(lines):
     if m in lines[i]:
-        # Remove this line + next (export), and preceding blank line
         if out and out[-1].strip() == '':
             out.pop()
         i += 2
@@ -63,8 +50,8 @@ with open(p, 'w') as f:
     f.writelines(out)
 " "$rc" "$marker"
         else
-          sed -i.bak "/$marker/{N;d;}" "$rc" 2>/dev/null || \
-            sed -i '' "/$marker/{N;d;}" "$rc"
+          sed -i.bak -e '/^$/N;/\n'"$marker"'/{N;d;}' "$rc" 2>/dev/null || \
+            sed -i '' -e '/^[[:space:]]*$/{N;/'"$marker"'/{N;d;}}' "$rc"
           rm -f "${rc}.bak"
         fi
         echo "Removed PATH entry ($marker) from $rc"
@@ -74,66 +61,58 @@ with open(p, 'w') as f:
   fi
 done
 
-# --- Remove MCP client configs (both "agent-bus" and "tmux-agent-bus" keys) ---
+# --- Remove MCP client configs ---
 
-remove_mcp_json() {
+remove_mcp_config() {
   config_file="$1"
   client_name="$2"
-  key="$3"
 
   if [ ! -f "$config_file" ]; then
     return
   fi
 
-  if ! grep -q "\"$key\"" "$config_file" 2>/dev/null; then
+  found=""
+  for key in agent-bus tmux-agent-bus; do
+    if grep -q "\"$key\"" "$config_file" 2>/dev/null; then
+      found="yes"
+    fi
+  done
+
+  if [ -z "$found" ]; then
     return
   fi
 
   # Use python3 for safe JSON manipulation
   if command -v python3 >/dev/null 2>&1; then
     python3 -c "
-import json, sys
-p, k = sys.argv[1], sys.argv[2]
+import json, sys, os
+p = sys.argv[1]
 with open(p) as f:
     data = json.load(f)
 if 'mcpServers' in data:
-    data['mcpServers'].pop(k, None)
+    data['mcpServers'].pop('agent-bus', None)
+    data['mcpServers'].pop('tmux-agent-bus', None)
 with open(p, 'w') as f:
     json.dump(data, f, indent=2)
     f.write('\n')
-" "$config_file" "$key" 2>/dev/null && {
-      echo "  $client_name: removed \"$key\""
+" "$config_file" 2>/dev/null && {
+      echo "  $client_name: removed"
       REMOVED="${REMOVED}${client_name}, "
       return
     }
   fi
 
-  # Fallback: sed
-  sed -i.bak "s/\"$key\"[[:space:]]*:[[:space:]]*{[^}]*}[[:space:]]*,\\?//g" "$config_file" 2>/dev/null || \
-    sed -i '' "s/\"$key\"[[:space:]]*:[[:space:]]*\\{[^}]*\\}[[:space:]]*,\\{0,1\\}//g" "$config_file"
-  rm -f "${config_file}.bak"
-  echo "  $client_name: removed \"$key\""
-  REMOVED="${REMOVED}${client_name}, "
+  echo "  $client_name: found but could not remove (edit $config_file manually)"
 }
 
-remove_mcp_config() {
-  config_file="$1"
-  client_name="$2"
-  remove_mcp_json "$config_file" "$client_name" "agent-bus"
-  remove_mcp_json "$config_file" "$client_name" "tmux-agent-bus"
-}
-
-echo ""
-echo "Removing MCP client configs..."
-
-# Claude Code (both old and new names)
+# Claude Code
 if command -v claude >/dev/null 2>&1; then
   for name in agent-bus tmux-agent-bus; do
     if claude mcp get "$name" >/dev/null 2>&1; then
       claude mcp remove -s user "$name" 2>/dev/null && {
         echo "  Claude Code: removed \"$name\""
         REMOVED="${REMOVED}Claude Code, "
-      } || echo "  Claude Code: failed to remove \"$name\""
+      } || echo "  Claude Code: failed to remove (try: claude mcp remove $name)"
     fi
   done
 fi
@@ -159,13 +138,13 @@ if [ "$PLATFORM" = "darwin" ]; then
   APP_SUPPORT="$HOME/Library/Application Support"
   remove_mcp_config "$APP_SUPPORT/Claude/claude_desktop_config.json" "Claude Desktop"
   remove_mcp_config "$APP_SUPPORT/ChatGPT/mcp.json" "ChatGPT Desktop"
-  remove_mcp_config "$HOME/.cursor/mcp.json" "Cursor"
+  remove_mcp_config "$HOME/.cursor/mcp.json" "Cursor / Agent"
   remove_mcp_config "$HOME/.codeium/windsurf/mcp_config.json" "Windsurf"
 elif [ "$PLATFORM" = "linux" ]; then
   XDG_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}"
   remove_mcp_config "$XDG_CONFIG/Claude/claude_desktop_config.json" "Claude Desktop"
   remove_mcp_config "$XDG_CONFIG/chatgpt/mcp.json" "ChatGPT Desktop"
-  remove_mcp_config "$HOME/.cursor/mcp.json" "Cursor"
+  remove_mcp_config "$HOME/.cursor/mcp.json" "Cursor / Agent"
   remove_mcp_config "$HOME/.codeium/windsurf/mcp_config.json" "Windsurf"
 fi
 
@@ -195,14 +174,14 @@ else
   echo "  No project-level configs found."
 fi
 
-# Codex (both old and new names)
+# Codex
 if command -v codex >/dev/null 2>&1; then
   for name in agent-bus tmux-agent-bus; do
     if codex mcp list 2>/dev/null | grep -q "$name"; then
       codex mcp remove "$name" 2>/dev/null && {
         echo "  Codex: removed \"$name\""
         REMOVED="${REMOVED}Codex, "
-      } || echo "  Codex: failed to remove \"$name\""
+      } || echo "  Codex: failed to remove (try: codex mcp remove $name)"
     fi
   done
 fi
@@ -219,5 +198,5 @@ echo ""
 if [ -z "$REMOVED" ]; then
   echo "Nothing to uninstall — agent-bus was not found."
 else
-  echo "Done! agent-bus has been fully uninstalled."
+  echo "Done! agent-bus has been uninstalled."
 fi

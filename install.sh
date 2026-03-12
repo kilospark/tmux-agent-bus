@@ -63,6 +63,21 @@ chmod +x "${INSTALL_DIR}/${BINARY}"
 
 echo "Installed ${BINARY} to ${INSTALL_DIR}/${BINARY}"
 
+# Clean up old tmux-agent-bus binary if present
+for dir in /usr/local/bin "$HOME/.local/bin"; do
+  if [ -x "$dir/tmux-agent-bus" ]; then
+    if [ -w "$dir" ]; then
+      rm -f "$dir/tmux-agent-bus"
+      echo "Removed old $dir/tmux-agent-bus (now use: agent-bus)"
+    elif sudo -n true 2>/dev/null; then
+      sudo rm -f "$dir/tmux-agent-bus"
+      echo "Removed old $dir/tmux-agent-bus (now use: agent-bus)"
+    else
+      echo "WARNING: old $dir/tmux-agent-bus still exists (remove manually)"
+    fi
+  fi
+done
+
 # Update stale copies in other known locations
 for other_dir in /usr/local/bin "$HOME/.local/bin"; do
   if [ "$other_dir" != "$INSTALL_DIR" ]; then
@@ -85,6 +100,7 @@ case ":$PATH:" in
   *":${INSTALL_DIR}:"*) ;;
   *)
     PATH_LINE="export PATH=\"${INSTALL_DIR}:\$PATH\""
+    # Detect shell rc file
     if [ -f "$HOME/.zshrc" ]; then
       RC_FILE="$HOME/.zshrc"
     elif [ -f "$HOME/.bashrc" ]; then
@@ -105,6 +121,7 @@ case ":$PATH:" in
       echo "WARNING: ${INSTALL_DIR} is not in your PATH. Add it with:"
       echo "  $PATH_LINE"
     fi
+    # Also update current session
     export PATH="${INSTALL_DIR}:$PATH"
     ;;
 esac
@@ -112,75 +129,46 @@ esac
 # --- Configure MCP clients ---
 
 BINARY_PATH="${INSTALL_DIR}/${BINARY}"
-OLD_NAME="tmux-agent-bus"
 CONFIGURED=""
 
-# Remove old tmux-agent-bus registration from an MCP config file (rename migration)
-# Uses python3 for safe JSON manipulation (avoids sed corruption on nested objects)
-# Usage: migrate_mcp_config <config_file> <client_name>
-migrate_mcp_config() {
-  config_file="$1"
-  client_name="$2"
-
-  if [ ! -f "$config_file" ]; then
-    return
-  fi
-
-  if ! grep -q "\"$OLD_NAME\"" "$config_file" 2>/dev/null; then
-    return 0
-  fi
-
-  if ! command -v python3 >/dev/null 2>&1; then
-    echo "  $client_name: WARNING: found old $OLD_NAME entry but python3 not available for migration"
-    echo "    Remove \"$OLD_NAME\" from $config_file manually"
-    return 1
-  fi
-
-  if python3 -c "
-import json, re, sys
-with open(sys.argv[1], 'r') as f:
-    raw = f.read()
-try:
-    cfg = json.loads(raw)
-except json.JSONDecodeError:
-    cfg = json.loads(re.sub(r',(\s*[}\]])', r'\1', raw))
-servers = cfg.get('mcpServers', {})
-if sys.argv[2] in servers:
-    del servers[sys.argv[2]]
-    with open(sys.argv[1], 'w') as f:
-        json.dump(cfg, f, indent=2)
-        f.write('\n')
-" "$config_file" "$OLD_NAME" 2>/dev/null; then
-    echo "  $client_name: migrated from $OLD_NAME"
-    return 0
-  else
-    echo "  $client_name: WARNING: failed to migrate $OLD_NAME entry"
-    echo "    Remove \"$OLD_NAME\" from $config_file manually"
-    return 1
-  fi
-}
-
 # Add agent-bus to an MCP config file
-# Usage: add_mcp_config <config_file> <client_name> [create_if_missing]
+# Usage: add_mcp_config <config_file> <client_name>
 add_mcp_config() {
   config_file="$1"
   client_name="$2"
-  create_if_missing="$3"
+  create_if_missing="${3:-false}"
 
   if [ ! -f "$config_file" ]; then
     if [ "$create_if_missing" = "true" ]; then
       mkdir -p "$(dirname "$config_file")"
       echo '{}' > "$config_file"
     else
-      return
+      return 0
     fi
   fi
 
-  # Migrate old name first — skip adding new entry if migration was needed but failed
-  if ! migrate_mcp_config "$config_file" "$client_name"; then
-    return
+  # Migrate old tmux-agent-bus entry if present
+  if grep -q '"tmux-agent-bus"' "$config_file" 2>/dev/null; then
+    if command -v python3 >/dev/null 2>&1; then
+      python3 -c "
+import json, re, sys
+p = sys.argv[1]
+with open(p) as f:
+    raw = f.read()
+try:
+    data = json.loads(raw)
+except json.JSONDecodeError:
+    data = json.loads(re.sub(r',(\s*[}\]])', r'\1', raw))
+if 'mcpServers' in data:
+    data['mcpServers'].pop('tmux-agent-bus', None)
+with open(p, 'w') as f:
+    json.dump(data, f, indent=2)
+    f.write('\n')
+" "$config_file" 2>/dev/null && echo "  $client_name: migrated from tmux-agent-bus"
+    fi
   fi
 
+  # Check if agent-bus is already configured
   if grep -q '"agent-bus"' "$config_file" 2>/dev/null; then
     echo "  $client_name: already configured"
     CONFIGURED="${CONFIGURED}${client_name}, "
@@ -229,9 +217,9 @@ echo "Configuring MCP clients..."
 # Claude Code (uses CLI, not a config file)
 if command -v claude >/dev/null 2>&1; then
   # Migrate old name
-  if claude mcp get "$OLD_NAME" >/dev/null 2>&1; then
-    claude mcp remove "$OLD_NAME" 2>/dev/null
-    echo "  Claude Code: removed old $OLD_NAME"
+  if claude mcp get tmux-agent-bus >/dev/null 2>&1; then
+    claude mcp remove tmux-agent-bus 2>/dev/null
+    echo "  Claude Code: removed old tmux-agent-bus"
   fi
   if claude mcp get agent-bus >/dev/null 2>&1; then
     echo "  Claude Code: already configured"
@@ -294,9 +282,9 @@ fi
 # Codex (uses CLI, not a config file)
 if command -v codex >/dev/null 2>&1; then
   # Migrate old name
-  if codex mcp list 2>/dev/null | grep -q "$OLD_NAME"; then
-    codex mcp remove "$OLD_NAME" 2>/dev/null
-    echo "  Codex: removed old $OLD_NAME"
+  if codex mcp list 2>/dev/null | grep -q 'tmux-agent-bus'; then
+    codex mcp remove tmux-agent-bus 2>/dev/null
+    echo "  Codex: removed old tmux-agent-bus"
   fi
   if codex mcp list 2>/dev/null | grep -q 'agent-bus'; then
     echo "  Codex: already configured"
