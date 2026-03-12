@@ -477,11 +477,16 @@ fn run_server(state: &AgentState) -> Result<()> {
 
         match method.as_str() {
             "initialize" => {
+                // Echo back the client's protocol version for Cursor Agent compat
+                let client_protocol = request
+                    .pointer("/params/protocolVersion")
+                    .and_then(Value::as_str)
+                    .unwrap_or("2024-11-05");
                 let response = json!({
                     "jsonrpc": "2.0",
                     "id": id,
                     "result": {
-                        "protocolVersion": "2025-11-25",
+                        "protocolVersion": client_protocol,
                         "capabilities": { "tools": {} },
                         "serverInfo": {
                             "name": "agent-bus",
