@@ -186,6 +186,50 @@ if command -v codex >/dev/null 2>&1; then
   done
 fi
 
+# Copilot CLI
+remove_mcp_config "$HOME/.copilot/mcp-config.json" "Copilot CLI"
+
+# Opencode
+OPENCODE_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/config.json"
+if [ -f "$OPENCODE_CONFIG" ]; then
+  found=""
+  for key in agent-bus tmux-agent-bus; do
+    if grep -q "\"$key\"" "$OPENCODE_CONFIG" 2>/dev/null; then
+      found="yes"
+    fi
+  done
+  if [ -n "$found" ] && command -v python3 >/dev/null 2>&1; then
+    python3 -c "
+import json, sys
+p = sys.argv[1]
+with open(p) as f:
+    data = json.load(f)
+for key in ('mcp', 'mcpServers'):
+    if key in data:
+        data[key].pop('agent-bus', None)
+        data[key].pop('tmux-agent-bus', None)
+with open(p, 'w') as f:
+    json.dump(data, f, indent=2)
+    f.write('\n')
+" "$OPENCODE_CONFIG" 2>/dev/null && {
+      echo "  Opencode: removed"
+      REMOVED="${REMOVED}Opencode, "
+    } || echo "  Opencode: found but could not remove (edit $OPENCODE_CONFIG manually)"
+  fi
+fi
+
+# Gemini CLI
+if command -v gemini >/dev/null 2>&1; then
+  for name in agent-bus tmux-agent-bus; do
+    if gemini mcp list 2>/dev/null | grep -q "$name"; then
+      gemini mcp remove -s user "$name" 2>/dev/null && {
+        echo "  Gemini CLI: removed \"$name\""
+        REMOVED="${REMOVED}Gemini CLI, "
+      } || echo "  Gemini CLI: failed to remove (try: gemini mcp remove -s user $name)"
+    fi
+  done
+fi
+
 # --- Remove channel data ---
 
 if [ -d "$HOME/.agent-bus" ]; then

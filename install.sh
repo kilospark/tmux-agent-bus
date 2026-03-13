@@ -297,6 +297,55 @@ if command -v codex >/dev/null 2>&1; then
   fi
 fi
 
+# Copilot CLI (uses ~/.copilot/mcp-config.json with standard mcpServers format)
+if command -v copilot >/dev/null 2>&1; then
+  add_mcp_config "$HOME/.copilot/mcp-config.json" "Copilot CLI" true
+fi
+
+# Opencode (uses different config format: "mcp" key, type "local", command as array)
+if command -v opencode >/dev/null 2>&1; then
+  OPENCODE_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/config.json"
+  if [ -f "$OPENCODE_CONFIG" ] && grep -q '"agent-bus"' "$OPENCODE_CONFIG" 2>/dev/null; then
+    echo "  Opencode: already configured"
+    CONFIGURED="${CONFIGURED}Opencode, "
+  elif command -v python3 >/dev/null 2>&1; then
+    if [ ! -f "$OPENCODE_CONFIG" ]; then
+      mkdir -p "$(dirname "$OPENCODE_CONFIG")"
+      echo '{}' > "$OPENCODE_CONFIG"
+    fi
+    python3 -c "
+import json, re, sys
+p, cmd = sys.argv[1], sys.argv[2]
+with open(p) as f:
+    raw = f.read()
+try:
+    data = json.loads(raw)
+except json.JSONDecodeError:
+    data = json.loads(re.sub(r',(\s*[}\]])', r'\1', raw))
+data.setdefault('mcp', {})['agent-bus'] = {'type': 'local', 'command': [cmd]}
+with open(p, 'w') as f:
+    json.dump(data, f, indent=2)
+    f.write('\n')
+" "$OPENCODE_CONFIG" "$BINARY_PATH" 2>/dev/null && {
+      echo "  Opencode: configured"
+      CONFIGURED="${CONFIGURED}Opencode, "
+    } || echo "  Opencode: failed to configure (add manually to $OPENCODE_CONFIG)"
+  fi
+fi
+
+# Gemini CLI (uses CLI, not a config file)
+if command -v gemini >/dev/null 2>&1; then
+  if gemini mcp list 2>/dev/null | grep -q 'agent-bus'; then
+    echo "  Gemini CLI: already configured"
+    CONFIGURED="${CONFIGURED}Gemini CLI, "
+  else
+    gemini mcp add -s user agent-bus "$BINARY_PATH" 2>/dev/null && {
+      echo "  Gemini CLI: configured"
+      CONFIGURED="${CONFIGURED}Gemini CLI, "
+    } || echo "  Gemini CLI: failed to configure (try: gemini mcp add -s user agent-bus $BINARY_PATH)"
+  fi
+fi
+
 if [ -z "$CONFIGURED" ]; then
   echo "  No MCP clients detected. Add manually to your client config:"
   echo ""

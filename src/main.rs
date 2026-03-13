@@ -128,6 +128,12 @@ fn detect_agent_type() -> String {
             if name == "agent" {
                 return "agent".into();
             }
+            if name == "gemini" || name.starts_with("gemini-") {
+                return "gemini".into();
+            }
+            if name == "opencode" || name.starts_with("opencode-") {
+                return "opencode".into();
+            }
         }
         match parent_pid(pid) {
             Some(ppid) if ppid != pid => pid = ppid,
@@ -195,7 +201,8 @@ fn try_send(pane: &str, sanitized: &str) -> Result<bool> {
 }
 
 fn send_to_pane(pane: &str, message: &str) -> Result<bool> {
-    let sanitized: String = message.split_whitespace().collect::<Vec<_>>().join(" ");
+    let sanitized: String = message.replace('!', "\u{FF01}")
+        .split_whitespace().collect::<Vec<_>>().join(" ");
 
     // First attempt
     if try_send(pane, &sanitized)? {
