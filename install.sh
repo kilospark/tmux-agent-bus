@@ -41,7 +41,7 @@ if [ -z "$VERSION" ]; then
   exit 1
 fi
 
-URL="https://github.com/${REPO}/releases/download/${VERSION}/${ASSET}.tar.gz"
+URL="https://agentbus.site/download/${VERSION}/${ASSET}.tar.gz"
 
 echo "Installing ${BINARY} ${VERSION} (${PLATFORM}/${ARCH_NAME})..."
 

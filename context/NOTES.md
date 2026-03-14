@@ -59,8 +59,8 @@ context/                # This folder — dev notes
 - **Binary releases**: Push `v*` tag → GitHub Actions builds macOS (arm64/x64) + Linux (x64/arm64)
 - **Release process**: Bump version in Cargo.toml, commit, `git tag v<version> && git push origin v<version>`
 - **Homepage**: Vercel auto-deploys from main, or `vercel --prod` manually
-- **Install**: `curl -fsSL https://raw.githubusercontent.com/kilospark/agentbus/main/install.sh | sh`
-- **Uninstall**: `curl -fsSL https://raw.githubusercontent.com/kilospark/agentbus/main/uninstall.sh | sh`
+- **Install**: `curl -fsSL https://agentbus.site/install | sh`
+- **Uninstall**: `curl -fsSL https://agentbus.site/uninstall | sh`
 
 ## MCP Server Name
 - Registered as `agentbus` in all MCP clients

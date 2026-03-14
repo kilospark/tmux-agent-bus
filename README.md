@@ -16,7 +16,7 @@ Agents communicate by calling `signal_done` or `send_message`, which injects tex
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kilospark/agentbus/main/install.sh | sh
+curl -fsSL https://agentbus.site/install | sh
 ```
 
 This downloads a single binary, adds it to your PATH, and auto-configures any detected MCP clients (Claude Code, Codex, Claude Desktop, Cursor, etc.).
@@ -24,7 +24,7 @@ This downloads a single binary, adds it to your PATH, and auto-configures any de
 ### Uninstall
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kilospark/agentbus/main/uninstall.sh | sh
+curl -fsSL https://agentbus.site/uninstall | sh
 ```
 
 ## tmux setup

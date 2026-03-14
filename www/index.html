@@ -6,6 +6,11 @@
   <title>agentbus — inter-agent communication for tmux</title>
   <meta name="description" content="MCP server that lets AI agents talk to each other across tmux panes. Zero config. Single binary.">
   <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#5af78e">
+  <link rel="icon" href="/favicon.ico" sizes="48x48">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <link rel="manifest" href="/site.webmanifest">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700;800&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap" rel="stylesheet">
@@ -561,7 +566,7 @@
 
       <div class="install-block">
         <span class="prompt">$</span>
-        <code>curl -fsSL https://agentbus.space/install <span class="pipe">|</span> sh</code>
+        <code>curl -fsSL https://agentbus.site/install <span class="pipe">|</span> sh</code>
         <button onclick="copyInstall()" id="copy-btn">copy</button>
       </div>
 
@@ -738,7 +743,7 @@
 
     // Copy install command
     function copyInstall() {
-      const cmd = 'curl -fsSL https://agentbus.space/install | sh';
+      const cmd = 'curl -fsSL https://agentbus.site/install | sh';
       navigator.clipboard.writeText(cmd).then(() => {
         const btn = document.getElementById('copy-btn');
         btn.textContent = 'copied';
