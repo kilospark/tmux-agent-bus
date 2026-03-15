@@ -21,6 +21,17 @@ Registration is automatic — you were assigned a unique name at startup (see "Y
 
 Use `"@all"` as the target in `signal_done` or `send_message` to broadcast to all other agents on your channel.
 
+## Message Types
+
+Use `kind` in `send_message` to indicate intent:
+- `"request"` — you expect a response. The recipient will be reminded until they reply.
+- `"response"` — you are answering a prior request. Use `reply_to` with the message ID.
+- `"fyi"` — informational, no response expected. This is the default.
+
+`signal_done` is always tracked as a handoff (similar to request).
+
+When a tracked message (request/handoff) is sent, the response includes a `msg_id`. The recipient sees this ID in their pending warnings. To resolve it, include `reply_to: "<msg_id>"` in your response.
+
 ## Workflow
 
 1. Call `who` to see other agents on the bus.
@@ -30,7 +41,11 @@ Use `"@all"` as the target in `signal_done` or `send_message` to broadcast to al
 
 ## When You Receive a Message
 
-If your input starts with `[from <name>]:`, another agent is handing off to you. Read the request and act on it. When done, call `who` to find them, then `signal_done` to hand back.
+If your input starts with `[from <name>]:`, another agent is handing off to you. Read the request and act on it.
+
+**You MUST reply using the bus tools.** When done, call `who` to find them, then `signal_done` or `send_message` to respond. NEVER just output your response as text — the other agent cannot see your text output. The ONLY way to communicate with another agent is through `signal_done` or `send_message`. If you don't use these tools, your response is lost.
+
+If you see a pending message warning in a tool response, you have unanswered requests. Respond to them using `reply_to` with the message ID shown.
 
 ## Coordination File
 

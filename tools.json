@@ -25,6 +25,10 @@
         "request": {
           "type": "string",
           "description": "What you need the next agent to do"
+        },
+        "reply_to": {
+          "type": "string",
+          "description": "Message ID being replied to (from a prior request). Resolves the pending request."
         }
       },
       "required": ["next", "summary", "request"]
@@ -43,6 +47,15 @@
         "message": {
           "type": "string",
           "description": "The message to send"
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["request", "response", "fyi"],
+          "description": "Message type: 'request' expects a response, 'response' answers a prior request, 'fyi' is informational (default: fyi)"
+        },
+        "reply_to": {
+          "type": "string",
+          "description": "Message ID being replied to (from a prior request/handoff). Resolves the pending request."
         }
       },
       "required": ["to", "message"]

@@ -174,6 +174,173 @@ fn parent_pid(pid: u32) -> Option<u32> {
         })
 }
 
+// --- Pending message tracking via tmux pane options ---
+
+// Simple base64 encode/decode to avoid tmux escaping issues
+fn base64_encode(data: &[u8]) -> String {
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut result = String::new();
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        result.push(CHARS[((n >> 18) & 63) as usize] as char);
+        result.push(CHARS[((n >> 12) & 63) as usize] as char);
+        if chunk.len() > 1 { result.push(CHARS[((n >> 6) & 63) as usize] as char); } else { result.push('='); }
+        if chunk.len() > 2 { result.push(CHARS[(n & 63) as usize] as char); } else { result.push('='); }
+    }
+    result
+}
+
+fn base64_decode(s: &str) -> Option<Vec<u8>> {
+    fn val(c: u8) -> Option<u32> {
+        match c {
+            b'A'..=b'Z' => Some((c - b'A') as u32),
+            b'a'..=b'z' => Some((c - b'a' + 26) as u32),
+            b'0'..=b'9' => Some((c - b'0' + 52) as u32),
+            b'+' => Some(62), b'/' => Some(63), b'=' => Some(0),
+            _ => None,
+        }
+    }
+    let bytes: Vec<u8> = s.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
+    let mut result = Vec::new();
+    for chunk in bytes.chunks(4) {
+        if chunk.len() < 4 { return None; }
+        let n = (val(chunk[0])? << 18) | (val(chunk[1])? << 12) | (val(chunk[2])? << 6) | val(chunk[3])?;
+        result.push(((n >> 16) & 255) as u8);
+        if chunk[2] != b'=' { result.push(((n >> 8) & 255) as u8); }
+        if chunk[3] != b'=' { result.push((n & 255) as u8); }
+    }
+    Some(result)
+}
+
+fn chrono_now() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    format!("{secs}")
+}
+
+fn gen_msg_id() -> String {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    format!("{:x}", ts & 0xFFFF_FFFF) // 8 hex chars, collision-resistant enough
+}
+
+/// Write a pending message to the recipient's tmux pane option.
+/// Uses base64 encoding to avoid tmux quote/escape issues with arbitrary JSON.
+fn set_pending(recipient_pane: &str, msg_id: &str, envelope: &Value) {
+    let key = format!("@agentbus-pending-{msg_id}");
+    let json = serde_json::to_string(envelope).unwrap_or_default();
+    let val = base64_encode(json.as_bytes());
+    let _ = Command::new("tmux")
+        .args(["set-option", "-p", "-t", recipient_pane, &key, &val])
+        .status();
+}
+
+/// Clear a pending message from a pane.
+fn clear_pending(pane: &str, msg_id: &str) {
+    let key = format!("@agentbus-pending-{msg_id}");
+    let _ = Command::new("tmux")
+        .args(["set-option", "-pu", "-t", pane, &key])
+        .status();
+}
+
+/// Read all pending messages for a pane. Returns Vec<(msg_id, envelope)>.
+fn read_pending(pane: &str) -> Vec<(String, Value)> {
+    let output = Command::new("tmux")
+        .args(["show-options", "-p", "-t", pane])
+        .output();
+    let output = match output {
+        Ok(o) if o.status.success() => o,
+        _ => return vec![],
+    };
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut pending = Vec::new();
+    for line in text.lines() {
+        // Format: @agentbus-pending-{id} base64data
+        if let Some(rest) = line.strip_prefix("@agentbus-pending-") {
+            if let Some((id, b64)) = rest.split_once(' ') {
+                let b64 = b64.trim().trim_matches('"');
+                if let Some(bytes) = base64_decode(b64) {
+                    if let Ok(json_str) = String::from_utf8(bytes) {
+                        if let Ok(val) = serde_json::from_str::<Value>(&json_str) {
+                            pending.push((id.to_string(), val));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    pending
+}
+
+/// Build a warning string for unanswered pending messages.
+fn pending_warnings(pane: &str) -> Option<String> {
+    let pending = read_pending(pane);
+    if pending.is_empty() {
+        return None;
+    }
+    let mut warnings = Vec::new();
+    for (id, env) in &pending {
+        let from = env.get("from").and_then(Value::as_str).unwrap_or("?");
+        let kind = env.get("kind").and_then(Value::as_str).unwrap_or("request");
+        let msg = env.get("message").and_then(Value::as_str)
+            .or_else(|| env.get("request").and_then(Value::as_str))
+            .unwrap_or("");
+        let preview = if msg.len() > 100 {
+            // Truncate at a char boundary
+            let mut end = 100;
+            while end > 0 && !msg.is_char_boundary(end) { end -= 1; }
+            &msg[..end]
+        } else {
+            msg
+        };
+        warnings.push(format!("  [{kind} id={id} from {from}]: {preview}"));
+    }
+    Some(format!(
+        "⚠ You have {} unanswered message(s). Respond using signal_done or send_message with reply_to:\n{}",
+        pending.len(),
+        warnings.join("\n")
+    ))
+}
+
+// --- Sender-side outbound tracking ---
+
+struct OutboundRequest {
+    msg_id: String,
+    recipient_pane: String,
+    created: std::time::Instant,
+}
+
+const TIMEOUT_SECS: u64 = 300; // 5 minutes
+
+fn check_outbound_timeouts(outbound: &mut Vec<OutboundRequest>) -> Option<String> {
+    let mut warnings = Vec::new();
+    outbound.retain(|req| {
+        if req.created.elapsed().as_secs() < TIMEOUT_SECS {
+            return true; // keep, not timed out yet
+        }
+        // Check if still pending on recipient's pane
+        let pending = read_pending(&req.recipient_pane);
+        let still_pending = pending.iter().any(|(id, _)| *id == req.msg_id);
+        if still_pending {
+            let who = read_pending(&req.recipient_pane)
+                .iter()
+                .find(|(id, _)| *id == req.msg_id)
+                .and_then(|(_, env)| env.get("to").and_then(Value::as_str).map(String::from))
+                .unwrap_or_else(|| "recipient".to_string());
+            warnings.push(format!("No response from {} to request {} after {}s.", who, req.msg_id, TIMEOUT_SECS));
+        }
+        false // remove from outbound list either way
+    });
+    if warnings.is_empty() { None } else { Some(warnings.join("\n")) }
+}
+
 // --- Message sending ---
 
 fn capture_pane(pane: &str) -> String {
@@ -244,6 +411,7 @@ struct AgentState {
     name: Option<String>,
     pane: Option<String>,
     channel: Option<String>,
+    outbound: Vec<OutboundRequest>,
 }
 
 impl AgentState {
@@ -312,7 +480,7 @@ impl Drop for AgentState {
 }
 
 fn register() -> AgentState {
-    let mut state = AgentState { name: None, pane: None, channel: None };
+    let mut state = AgentState { name: None, pane: None, channel: None, outbound: Vec::new() };
     state.do_register(None);
 
     // Enable pane borders for this window if not already on
@@ -361,61 +529,139 @@ fn handle_who(state: &AgentState) -> Value {
     ok_result(&format!("Channel \"{channel}\":\n{}\n\nUse \"@all\" to broadcast to all agents.", lines.join("\n")))
 }
 
-fn handle_signal_done(state: &AgentState, args: &Value) -> Value {
+fn handle_signal_done(state: &mut AgentState, args: &Value) -> Value {
     let channel = match &state.channel {
-        Some(c) => c,
+        Some(c) => c.clone(),
         None => return err_result("Not running inside tmux."),
     };
     let next = args["next"].as_str().unwrap_or_default();
     let summary = args["summary"].as_str().unwrap_or_default();
     let request = args["request"].as_str().unwrap_or_default();
-    let my_name = state.name.as_deref().unwrap_or("unknown");
+    let reply_to = args["reply_to"].as_str();
+    let my_name = state.name.as_deref().unwrap_or("unknown").to_string();
+    let msg_id = gen_msg_id();
     let message = format!("[from {my_name}]: {summary} Request: {request}");
 
     if next == "@all" {
-        return broadcast(channel, my_name, &message);
+        let result = broadcast(&channel, &my_name, &message);
+        // Clear pending only if broadcast didn't fully fail
+        if !result.get("isError").and_then(Value::as_bool).unwrap_or(false) {
+            if let (Some(reply_id), Some(pane)) = (reply_to, &state.pane) {
+                clear_pending(pane, reply_id);
+            }
+        }
+        return result;
     }
 
-    match find_agent(next, channel) {
+    match find_agent(next, &channel) {
         None => {
-            let available = available_agents(channel, my_name);
+            let available = available_agents(&channel, &my_name);
             err_result(&format!("Unknown agent \"{next}\". Available: {available}."))
         }
         Some(pane) => {
-            match send_to_pane(&pane, &message) {
-                Ok(true) => ok_result(&format!("Handed off to {next} (pane {pane}). Ack: message received.")),
-                Ok(false) => err_result(&format!("Message sent to {next} (pane {pane}) but no ack — message could not be delivered.")),
-                Err(e) => err_result(&format!("Failed to reach {next}: {e}")),
+            let envelope = json!({
+                "id": msg_id,
+                "from": my_name,
+                "to": next,
+                "kind": "handoff",
+                "message": message,
+                "summary": summary,
+                "request": request,
+                "created_at": chrono_now(),
+            });
+            set_pending(&pane, &msg_id, &envelope);
+
+            state.outbound.push(OutboundRequest {
+                msg_id: msg_id.clone(),
+                recipient_pane: pane.clone(),
+                created: std::time::Instant::now(),
+            });
+
+            let result = match send_to_pane(&pane, &message) {
+                Ok(true) => ok_result(&format!("Handed off to {next} (pane {pane}). Ack: message received. [msg_id: {msg_id}]")),
+                Ok(false) => ok_result(&format!("Handed off to {next} (pane {pane}). No ack — message queued as pending. [msg_id: {msg_id}]")),
+                Err(e) => return err_result(&format!("Failed to reach {next}: {e}")),
+            };
+
+            // Clear reply_to pending only after successful delivery
+            if let (Some(reply_id), Some(my_pane)) = (reply_to, &state.pane) {
+                clear_pending(my_pane, reply_id);
             }
+            result
         }
     }
 }
 
-fn handle_send_message(state: &AgentState, args: &Value) -> Value {
+fn handle_send_message(state: &mut AgentState, args: &Value) -> Value {
     let channel = match &state.channel {
-        Some(c) => c,
+        Some(c) => c.clone(),
         None => return err_result("Not running inside tmux."),
     };
     let to = args["to"].as_str().unwrap_or_default();
     let message = args["message"].as_str().unwrap_or_default();
-    let my_name = state.name.as_deref().unwrap_or("unknown");
+    let kind = args["kind"].as_str().unwrap_or("fyi");
+    let reply_to = args["reply_to"].as_str();
+    let my_name = state.name.as_deref().unwrap_or("unknown").to_string();
+    let msg_id = gen_msg_id();
     let full_message = format!("[message from {my_name}]: {message}");
 
     if to == "@all" {
-        return broadcast(channel, my_name, &full_message);
+        let result = broadcast(&channel, &my_name, &full_message);
+        if !result.get("isError").and_then(Value::as_bool).unwrap_or(false) {
+            if let (Some(reply_id), Some(pane)) = (reply_to, &state.pane) {
+                clear_pending(pane, reply_id);
+            }
+        }
+        return result;
     }
 
-    match find_agent(to, channel) {
+    match find_agent(to, &channel) {
         None => {
-            let available = available_agents(channel, my_name);
+            let available = available_agents(&channel, &my_name);
             err_result(&format!("Unknown agent \"{to}\". Available: {available}."))
         }
         Some(pane) => {
-            match send_to_pane(&pane, &full_message) {
-                Ok(true) => ok_result(&format!("Message sent to {to} (pane {pane}). Ack: message received.")),
-                Ok(false) => err_result(&format!("Message sent to {to} (pane {pane}) but no ack — message could not be delivered.")),
-                Err(e) => err_result(&format!("Failed to reach {to}: {e}")),
+            if kind == "request" {
+                let envelope = json!({
+                    "id": msg_id,
+                    "from": my_name,
+                    "to": to,
+                    "kind": "request",
+                    "message": message,
+                    "created_at": chrono_now(),
+                });
+                set_pending(&pane, &msg_id, &envelope);
+
+                state.outbound.push(OutboundRequest {
+                    msg_id: msg_id.clone(),
+                    recipient_pane: pane.clone(),
+                    created: std::time::Instant::now(),
+                });
             }
+
+            let result = match send_to_pane(&pane, &full_message) {
+                Ok(true) => {
+                    if kind == "request" {
+                        ok_result(&format!("Message sent to {to} (pane {pane}). Ack: message received. [msg_id: {msg_id}]"))
+                    } else {
+                        ok_result(&format!("Message sent to {to} (pane {pane}). Ack: message received."))
+                    }
+                }
+                Ok(false) => {
+                    if kind == "request" {
+                        ok_result(&format!("Message sent to {to} (pane {pane}). No ack — message queued as pending. [msg_id: {msg_id}]"))
+                    } else {
+                        err_result(&format!("Message sent to {to} (pane {pane}) but no ack — message could not be delivered."))
+                    }
+                }
+                Err(e) => return err_result(&format!("Failed to reach {to}: {e}")),
+            };
+
+            // Clear reply_to pending only after successful delivery
+            if let (Some(reply_id), Some(my_pane)) = (reply_to, &state.pane) {
+                clear_pending(my_pane, reply_id);
+            }
+            result
         }
     }
 }
@@ -642,7 +888,18 @@ fn run_server(state: &mut AgentState) -> Result<()> {
                     .unwrap_or_default();
                 let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
 
-                let result = match tool_name {
+                // Check for pending warnings (recipient-side) and outbound timeouts (sender-side)
+                let mut extra_warnings = Vec::new();
+                if let Some(pane) = &state.pane {
+                    if let Some(w) = pending_warnings(pane) {
+                        extra_warnings.push(w);
+                    }
+                }
+                if let Some(w) = check_outbound_timeouts(&mut state.outbound) {
+                    extra_warnings.push(w);
+                }
+
+                let mut result = match tool_name {
                     "who" => handle_who(state),
                     "signal_done" => handle_signal_done(state, &arguments),
                     "send_message" => handle_send_message(state, &arguments),
@@ -665,6 +922,15 @@ fn run_server(state: &mut AgentState) -> Result<()> {
                     }
                     _ => err_result(&format!("Unknown tool: {tool_name}")),
                 };
+
+                // Append pending message warnings to the tool response
+                if !extra_warnings.is_empty() {
+                    if let Some(content) = result.get_mut("content").and_then(Value::as_array_mut) {
+                        for warning in extra_warnings {
+                            content.push(json!({"type": "text", "text": warning}));
+                        }
+                    }
+                }
 
                 let response = json!({
                     "jsonrpc": "2.0",
